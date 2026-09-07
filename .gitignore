@@ -1,0 +1,9 @@
+.build/
+.swiftpm/
+*.xcodeproj
+.DS_Store
+
+# 打包产物和抓包日志不进仓库
+*.app/
+*.dmg
+*.log
