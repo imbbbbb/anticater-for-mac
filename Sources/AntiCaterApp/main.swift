@@ -1,5 +1,6 @@
 import SwiftUI
 import AntiCaterCore
+import AntiCaterUI
 
 // SwiftPM 的 executableTarget 里 main.swift 不能用 @main，这里手工起 App。
 struct AntiCaterApp: App {

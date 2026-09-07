@@ -61,7 +61,12 @@ public final class HIDTransport {
     private let device: IOHIDDevice
     private var opened = false
     private var inbox: [[UInt8]] = []
-    private let inputBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: payloadSize + 1)
+    private var inputBuffer: UnsafeMutablePointer<UInt8>? =
+        .allocate(capacity: payloadSize + 1)
+
+    /// `open()` 时所在线程的 run loop。注销回调必须回到同一个 run loop，
+    /// 不能用 deinit 当时的 `CFRunLoopGetCurrent()` —— 见 `close()` 的说明。
+    private var scheduledRunLoop: CFRunLoop?
 
     // MARK: - 发现
 
@@ -69,19 +74,28 @@ public final class HIDTransport {
         (IOHIDDeviceGetProperty(device, key as CFString) as? NSNumber)?.intValue
     }
 
-    /// 找到第一个匹配的配置接口。复合设备里键盘接口会被跳过，只认 0xFF00。
+    /// 交给 IOKit 在内核侧做筛选的匹配条件：受支持的 VID/PID，且必须是 0xFF00 配置接口。
+    ///
+    /// 早先这里传的是 `nil`（匹配全部 HID 设备）再在 Swift 侧过滤，等于把系统上
+    /// 每一个键鼠都拿到手里再扔掉。改成显式匹配后只会拿到目标接口。
+    static var configMatchingCriteria: [[String: Any]] {
+        supportedIDs.map { ids in
+            [kIOHIDVendorIDKey: ids.vid,
+             kIOHIDProductIDKey: ids.pid,
+             kIOHIDPrimaryUsagePageKey: configUsagePage,
+             kIOHIDPrimaryUsageKey: configUsage]
+        }
+    }
+
+    /// 找到第一个匹配的配置接口。复合设备里键盘接口不在匹配条件内，不会被返回。
     public static func discover() -> HIDTransport? {
         let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
-        IOHIDManagerSetDeviceMatching(manager, nil)
+        IOHIDManagerSetDeviceMatchingMultiple(manager, configMatchingCriteria as CFArray)
         guard let devices = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> else { return nil }
 
         for device in devices {
             guard let vid = intProperty(device, kIOHIDVendorIDKey),
-                  let pid = intProperty(device, kIOHIDProductIDKey),
-                  supportedIDs.contains(where: { $0.vid == vid && $0.pid == pid }),
-                  intProperty(device, kIOHIDPrimaryUsagePageKey) == configUsagePage,
-                  intProperty(device, kIOHIDPrimaryUsageKey) == configUsage
-            else { continue }
+                  let pid = intProperty(device, kIOHIDProductIDKey) else { continue }
             return HIDTransport(device: device, vid: vid, pid: pid)
         }
         return nil
@@ -94,18 +108,53 @@ public final class HIDTransport {
         self.serialNumber = IOHIDDeviceGetProperty(device, kIOHIDSerialNumberKey as CFString) as? String
     }
 
-    deinit {
-        if opened {
-            IOHIDDeviceUnscheduleFromRunLoop(device, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
-            IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone))
+    /// 关闭设备并注销输入回调。**必须在当初调用 `open()` 的那个线程上调用。**
+    ///
+    /// 输入回调的 context 是 `Unmanaged.passUnretained(self)`，也就是说回调里拿到的
+    /// self 没有引用计数保护。只要设备还挂在 run loop 上，晚到一条报文就会去解一个
+    /// 已经释放的指针。所以注销回调这件事必须发生在对象还活着的时候，不能拖到 deinit。
+    ///
+    /// 而 deinit 里做也不行：`IOHIDDeviceScheduleWithRunLoop` 挂的是 worker 线程的
+    /// run loop，session 却是在主线程被置 nil 的，deinit 里的 `CFRunLoopGetCurrent()`
+    /// 拿到的是主线程 run loop，那句 unschedule 是空操作 —— 设备照旧挂在 worker 上，
+    /// context 已经悬空。
+    public func close() {
+        guard opened else { return }
+        opened = false
+
+        // 传 nil 回调即注销。必须赶在缓冲区释放之前，否则 IOKit 可能往已释放的内存写。
+        if let buffer = inputBuffer {
+            IOHIDDeviceRegisterInputReportCallback(device, buffer, Self.payloadSize + 1, nil, nil)
         }
-        inputBuffer.deallocate()
+        IOHIDDeviceUnscheduleFromRunLoop(device,
+                                         scheduledRunLoop ?? CFRunLoopGetCurrent(),
+                                         CFRunLoopMode.defaultMode.rawValue)
+        IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone))
+        scheduledRunLoop = nil
+        inbox.removeAll()
+    }
+
+    deinit {
+        // 正常路径下 `close()` 已经调过了，这里只剩释放缓冲区。
+        // 走到 else 分支说明有调用方漏了 close()，属于编程错误：此时既不能安全地
+        // 注销回调（不在正确的线程上），也不能释放缓冲区（回调可能还会往里写），
+        // 只好把这 65 字节泄漏掉换取内存安全，并留下记录。
+        if opened {
+            assertionFailure("HIDTransport 被释放时仍处于打开状态，close() 漏调了")
+            FileHandle.standardError.write(
+                "warning: HIDTransport 未经 close() 即释放，输入缓冲区已泄漏以避免悬垂写入\n"
+                    .data(using: .utf8)!)
+        } else {
+            inputBuffer?.deallocate()
+        }
+        inputBuffer = nil
     }
 
     // MARK: - 打开 / 收发
 
     public func open() throws {
         guard !opened else { return }
+        guard let inputBuffer else { return }
         let rc = IOHIDDeviceOpen(device, IOOptionBits(kIOHIDOptionsTypeNone))
         guard rc == kIOReturnSuccess else { throw Failure.openFailed(rc) }
         opened = true
@@ -124,6 +173,8 @@ public final class HIDTransport {
                 transport.inbox.append(bytes)
             },
             context)
+        // 记住是哪个 run loop，close() 要回到同一个上面注销。
+        scheduledRunLoop = CFRunLoopGetCurrent()
         IOHIDDeviceScheduleWithRunLoop(device, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
     }
 

@@ -19,6 +19,13 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/AntiCater"
 
+# 图标由 Tools/make-icon.sh 生成并入库。缺了也能打包，只是 Dock 里是白板。
+if [ -f Resources/AppIcon.icns ]; then
+    cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+else
+    echo "警告：Resources/AppIcon.icns 不存在，先跑 ./Tools/make-icon.sh" >&2
+fi
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -27,7 +34,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleName</key>              <string>ANTICATER</string>
     <key>CFBundleDisplayName</key>       <string>ANTICATER 原生版</string>
     <key>CFBundleExecutable</key>        <string>AntiCater</string>
-    <key>CFBundleIdentifier</key>        <string>local.anticater.native</string>
+    <key>CFBundleIdentifier</key>        <string>io.github.imbbbbb.anticater</string>
+    <key>CFBundleIconFile</key>          <string>AppIcon</string>
     <key>CFBundlePackageType</key>       <string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundleVersion</key>           <string>$VERSION</string>

@@ -6,17 +6,17 @@ import AntiCaterCore
 ///
 /// 所有 HID 调用都丢给 `HIDWorker` 的专属线程，回调统一在主线程，所以下面的
 /// @Published 属性只会被主线程改动。
-final class DeviceModel: ObservableObject {
+public final class DeviceModel: ObservableObject {
 
-    enum Connection: Equatable {
+    public enum Connection: Equatable {
         case disconnected
         case connecting
         case connected(name: String, serial: String, firmware: String)
 
-        var isConnected: Bool { if case .connected = self { return true }; return false }
+        public var isConnected: Bool { if case .connected = self { return true }; return false }
     }
 
-    @Published private(set) var connection: Connection = .disconnected
+    @Published public private(set) var connection: Connection = .disconnected
     /// 从设备读回来的配置，作为「已保存」基线
     @Published private(set) var saved: [UInt8: [Proto.Binding]] = [:]
     /// 界面上正在编辑的副本
@@ -26,8 +26,8 @@ final class DeviceModel: ObservableObject {
     @Published private(set) var palette: [Color] = []
     private var rawPalette: [(r: UInt8, g: UInt8, b: UInt8)] = []
 
-    /// USB / 蓝牙两条链路各自在不在线。几秒扫一次，只读，不打开设备。
-    @Published private(set) var links = LinkStatus()
+    /// USB / 蓝牙两条链路各自在不在线。插拔事件驱动，只读，不打开设备。
+    @Published public private(set) var links = LinkStatus()
 
     @Published var layer: UInt8 = 1
     @Published var selected: PhysicalKey = .rotateLeft
@@ -44,13 +44,34 @@ final class DeviceModel: ObservableObject {
     }
     @Published var errorMessage: String?
 
-    private let worker = HIDWorker()
-    private var session: Session?
-    private let linkMonitor = LinkMonitor()
+    private let worker: JobRunner
+    /// 测试要看它在拔线/写失败之后有没有被丢掉，所以 setter 私有、getter 内部可见。
+    private(set) var session: DeviceSession?
+    private let linkMonitor: LinkMonitor?
+    /// 怎么建立一次连接。真机上是 `Session.connect()`，测试里换成假设备。
+    private let makeSession: () throws -> DeviceSession
 
-    init() {
-        linkMonitor.onChange = { [weak self] status in self?.handleLinkChange(status) }
-        linkMonitor.refresh()
+    public convenience init() {
+        self.init(worker: HIDWorker(), monitorLinks: true, makeSession: { try Session.connect() })
+    }
+
+    /// - Parameter monitorLinks: 关掉之后不注册 IOKit 插拔回调，测试里直接调
+    ///   `handleLinkChange` 就能模拟拔插，不需要真设备。
+    init(worker: JobRunner,
+         monitorLinks: Bool,
+         makeSession: @escaping () throws -> DeviceSession) {
+        self.worker = worker
+        self.makeSession = makeSession
+        self.linkMonitor = monitorLinks ? LinkMonitor() : nil
+        linkMonitor?.onChange = { [weak self] status in self?.handleLinkChange(status) }
+        linkMonitor?.refresh()
+    }
+
+    deinit {
+        // 退出时也要走一遍 close()，否则输入回调会留在 worker 线程上悬着。
+        if let session {
+            worker.run { session.close() }
+        }
     }
 
     // MARK: - 链路变化
@@ -58,7 +79,7 @@ final class DeviceModel: ObservableObject {
     /// 拔线之后 `IOHIDDevice` 引用立刻作废，但 session 不会自己知道，
     /// 再往上面写就是 `kIOReturnBadArgument`（0xE00002C2）。所以徽标灭的同时
     /// 必须把 session 一起丢掉——两个状态不能脱节。
-    private func handleLinkChange(_ status: LinkStatus) {
+    func handleLinkChange(_ status: LinkStatus) {
         let hadUSB = links.usb
         links = status
 
@@ -72,7 +93,14 @@ final class DeviceModel: ObservableObject {
     }
 
     /// 丢掉失效的 session。不碰 draft——用户的编辑内容跟连接状态没关系。
+    ///
+    /// 关设备这一步必须丢回 worker 线程：输入回调是在那个线程的 run loop 上注册的，
+    /// 注销也只能在那里做（`HIDTransport.close()` 里有详细说明）。这里如果只是
+    /// `session = nil`，回调就会留在 worker 上指着一个已经释放的对象。
     private func invalidateSession(reason: String?) {
+        if let old = session {
+            worker.run { old.close() }
+        }
         session = nil
         connection = .disconnected
         if let reason { message = reason }
@@ -154,7 +182,7 @@ final class DeviceModel: ObservableObject {
     // MARK: - 连接与读取
 
     struct Snapshot {
-        let session: Session
+        let session: DeviceSession
         let name: String
         let serial: String
         let firmware: String
@@ -164,23 +192,32 @@ final class DeviceModel: ObservableObject {
 
     /// - Parameter preservingDraft: 为真时只刷新「已保存」基线，保留编辑区内容。
     ///   拔插线自动重连时用得上：连接断过不代表用户想丢掉改到一半的东西。
-    func connect(preservingDraft: Bool = false, silentOnFailure: Bool = false) {
+    public func connect(preservingDraft: Bool = false, silentOnFailure: Bool = false) {
         guard !busy else { return }
+        // 重连前先把旧的关掉，否则设备会被同一个进程开两次，旧句柄也没人注销回调。
+        invalidateSession(reason: nil)
         busy = true
         connection = .connecting
         errorMessage = nil
 
-        worker.run {
-            let session = try Session.connect()
-            let hello = try session.handshake()
-            return Snapshot(
-                session: session,
-                name: String(format: "0x%04X:0x%04X",
-                             session.transport.vendorID, session.transport.productID),
-                serial: session.transport.serialNumber ?? "-",
-                firmware: hello.count > 3 ? String(hello[3]) : "?",
-                layers: try session.readAllLayers(),
-                light: try session.readLight())
+        let makeSession = self.makeSession
+        worker.run { () throws -> Snapshot in
+            let session = try makeSession()
+            do {
+                let hello = try session.handshake()
+                return Snapshot(
+                    session: session,
+                    name: session.deviceName,
+                    serial: session.serialNumber ?? "-",
+                    firmware: hello.count > 3 ? String(hello[3]) : "?",
+                    layers: try session.readAllLayers(),
+                    light: try session.readLight())
+            } catch {
+                // 设备已经打开、但握手或首次读取失败：这个 session 不会有人接手，
+                // 必须就地关掉。这里已经在 worker 线程上，close() 的线程要求满足。
+                session.close()
+                throw error
+            }
         } completion: { [weak self] result in
             guard let self else { return }
             self.busy = false
@@ -199,6 +236,7 @@ final class DeviceModel: ObservableObject {
                 }
                 self.apply(light: snapshot.light)
             case .failure(let error):
+                // session 已经在 worker 里关掉了，这里只要把界面状态摆正。
                 self.session = nil
                 self.connection = .disconnected
                 // 插线触发的自动重连不该弹窗——用户没点任何东西，凭空跳个报错

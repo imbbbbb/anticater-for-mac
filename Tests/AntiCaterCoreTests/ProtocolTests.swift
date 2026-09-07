@@ -180,3 +180,45 @@ final class ProtocolTests: XCTestCase {
         XCTAssertFalse(HIDTransport.Failure.timeout(expected: 5, got: 2).meansDisconnected)
     }
 }
+
+/// 版本比较的测试。看着琐碎，但比错了的后果是「有新版却不提示」
+/// 或者「永远提示有新版」，两种都很烦人。
+final class UpdateCheckerTests: XCTestCase {
+
+    func testNewerVersionIsDetected() {
+        XCTAssertTrue(UpdateChecker.isNewer("v1.1", than: "1.0"))
+        XCTAssertTrue(UpdateChecker.isNewer("2.0", than: "1.9"))
+        XCTAssertTrue(UpdateChecker.isNewer("1.0.1", than: "1.0"))
+    }
+
+    /// 必须按数字比，不能按字典序——字典序下 "1.10" < "1.9"，
+    /// 于是从 1.9 升到 1.10 就永远不会提示。
+    func testDoubleDigitVersionsCompareNumerically() {
+        XCTAssertTrue(UpdateChecker.isNewer("1.10", than: "1.9"))
+        XCTAssertFalse(UpdateChecker.isNewer("1.9", than: "1.10"))
+    }
+
+    func testSameVersionIsNotNewer() {
+        XCTAssertFalse(UpdateChecker.isNewer("1.0", than: "1.0"))
+        XCTAssertFalse(UpdateChecker.isNewer("v1.0", than: "1.0"), "开头的 v 不该影响比较")
+        XCTAssertFalse(UpdateChecker.isNewer("1.0.0", than: "1.0"), "补零后应视为相等")
+    }
+
+    func testOlderVersionIsNotNewer() {
+        XCTAssertFalse(UpdateChecker.isNewer("0.9", than: "1.0"))
+        XCTAssertFalse(UpdateChecker.isNewer("1.0", than: "1.0.1"))
+    }
+
+    /// tag 里混进非数字后缀时不能崩，也不该误判成更新。
+    func testMalformedTagsDoNotCrash() {
+        XCTAssertFalse(UpdateChecker.isNewer("", than: AppVersion.string))
+        XCTAssertFalse(UpdateChecker.isNewer("v1.0-beta", than: "1.0"))
+        XCTAssertTrue(UpdateChecker.isNewer("v1.2-beta", than: "1.1"))
+    }
+
+    /// 发布流程会拿 AppVersion 当 tag，格式不对整条链都会歪。
+    func testAppVersionIsParseable() {
+        XCTAssertFalse(UpdateChecker.components(AppVersion.string).isEmpty)
+        XCTAssertTrue(UpdateChecker.isNewer("99.0", than: AppVersion.string))
+    }
+}

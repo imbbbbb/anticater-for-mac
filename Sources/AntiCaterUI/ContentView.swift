@@ -1,13 +1,15 @@
 import SwiftUI
 import AntiCaterCore
 
-struct ContentView: View {
+public struct ContentView: View {
     @ObservedObject var model: DeviceModel
     @State private var confirmWrite = false
     @State private var confirmClearAll = false
     @State private var showError = false
 
-    var body: some View {
+    public init(model: DeviceModel) { self.model = model }
+
+    public var body: some View {
         NavigationSplitView {
             sidebar
                 .navigationSplitViewColumnWidth(min: 250, ideal: 272, max: 320)

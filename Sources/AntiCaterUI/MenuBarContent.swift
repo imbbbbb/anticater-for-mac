@@ -3,7 +3,7 @@ import AntiCaterCore
 
 /// 菜单栏里的常驻面板。只放「看一眼」和「一键就能改」的东西，
 /// 真要编辑按键还是回主窗口——菜单里塞编辑器不好用。
-struct MenuBarContent: View {
+public struct MenuBarContent: View {
     @ObservedObject var model: DeviceModel
     @Environment(\.openWindow) private var openWindow
 
@@ -11,13 +11,26 @@ struct MenuBarContent: View {
     @State private var launchError: String?
     @State private var needsApproval = LaunchAtLogin.needsApproval
 
-    var body: some View {
+    @State private var autoCheckUpdates = UpdateChecker.autoCheckEnabled
+    @State private var updateStatus: String?
+    @State private var newVersion: String?
+    /// 一次启动只自动查一次，菜单反复打开不该反复发请求。
+    @State private var didAutoCheck = false
+
+    public init(model: DeviceModel) { self.model = model }
+
+    public var body: some View {
         Text(linkSummary)
             // 菜单每次弹出都重读一次开关状态。用户可能刚在「系统设置 → 登录项」
             // 里手动关掉了，@State 里那份初值不会自己更新，会一直显示成开着。
             .onAppear {
                 launchAtLogin = LaunchAtLogin.isEnabled
                 needsApproval = LaunchAtLogin.needsApproval
+                if autoCheckUpdates, !didAutoCheck {
+                    didAutoCheck = true
+                    // 自动检查是静默的：查不到新版本、或者根本连不上网，都不打扰用户。
+                    Task { await runUpdateCheck(announceNoUpdate: false) }
+                }
             }
 
         Divider()
@@ -76,8 +89,46 @@ struct MenuBarContent: View {
         // 版本号露在界面上，方便和 GitHub 上的 Release 对得起来。
         Text("ANTICATER 原生版 \(AppVersion.string)")
 
+        if let newVersion {
+            Button("有新版本 \(newVersion)，去下载…") {
+                NSWorkspace.shared.open(UpdateChecker.releasesPage)
+            }
+        }
+        if let updateStatus {
+            Text(updateStatus)
+        }
+
+        Button("检查更新") {
+            Task { await runUpdateCheck(announceNoUpdate: true) }
+        }
+
+        Toggle("启动时检查更新", isOn: Binding(
+            get: { autoCheckUpdates },
+            set: { on in
+                autoCheckUpdates = on
+                UpdateChecker.autoCheckEnabled = on
+            }))
+
         Button("退出 ANTICATER") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
+    }
+
+    /// - Parameter announceNoUpdate: 手动点「检查更新」时要给个回音，
+    ///   哪怕结果是「已经是最新」或者没联网；自动检查则一律静默。
+    @MainActor
+    private func runUpdateCheck(announceNoUpdate: Bool) async {
+        if announceNoUpdate { updateStatus = "正在检查…" }
+        switch await UpdateChecker.check() {
+        case .success(.available(let version)):
+            newVersion = version
+            updateStatus = nil
+        case .success(.upToDate):
+            newVersion = nil
+            updateStatus = announceNoUpdate ? "已经是最新版本" : nil
+        case .failure(let error):
+            newVersion = nil
+            updateStatus = announceNoUpdate ? "\(error)" : nil
+        }
     }
 
     private var linkSummary: String {

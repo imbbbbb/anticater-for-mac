@@ -1,12 +1,16 @@
 # 反方向ANTICATER
 
+[English](README.en.md)
+
 ANTICATER 桌面音量旋钮配置工具的 macOS 原生版本。在原版 app 的基础上二次开发，功能与协议与其保持一致，代码使用 Swift + SwiftUI 重新实现，不包含原版的任何源码或二进制文件。
 
 原版为 x86_64 单架构 Qt 程序，在 Apple Silicon 设备上需经 Rosetta 2 运行，而 Rosetta 2 将于 macOS 28 移除。本项目提供原生 arm64 实现，并按 macOS 平台惯例重新设计了界面。
 
-版本 1.0 · 要求 macOS 13 或更高版本 · 仅供非商业使用
+版本 1.1 · 要求 macOS 13 或更高版本 · 仅供非商业使用
 
 ---
+
+![主界面](docs/images/main-window.png)
 
 ## 功能
 
@@ -24,6 +28,8 @@ ANTICATER 桌面音量旋钮配置工具的 macOS 原生版本。在原版 app �
 
 配置保存在旋钮固件中，设置完成后无需保持本软件运行，更换电脑后配置依然有效。本软件仅用于修改配置。
 
+![Procreate 预设](docs/images/procreate.png)
+
 ## 安装
 
 从 [Releases](../../releases) 下载 DMG，将应用拖入「应用程序」。
@@ -38,12 +44,21 @@ ANTICATER 桌面音量旋钮配置工具的 macOS 原生版本。在原版 app �
 
 在左侧选择旋钮动作，在右侧选择类型并修改设置，通过右上角「写入旋钮」提交。修改先暂存于编辑区，提交前可随时放弃；写入完成后自动回读校验，未写入成功的项目会明确列出。
 
+数据线中途拔出时会自动断开连接并保留编辑区内容，插回后自动重连。
+
+## 联网行为
+
+本软件唯一的联网行为是检查更新：向 GitHub 的公开 API 请求本仓库最新 Release 的版本号，与当前版本比较。请求不携带任何标识信息，也不上报本机情况。
+
+该功能可在菜单栏面板中通过「启动时检查更新」关闭，关闭后仅在手动点击「检查更新」时发起请求。除此之外，本软件不进行任何网络通信。
+
 ## 构建
 
 ```bash
 swift build -c release
-./make-app.sh      # 生成 .app
-./make-dmg.sh      # 生成 DMG
+./make-app.sh          # 生成 .app
+./make-dmg.sh          # 生成 DMG
+./Tools/make-icon.sh   # 重新生成图标（改了 make-icon.swift 才需要）
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
 ```
 
@@ -55,12 +70,18 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
 
 ```
 Sources/
-  AntiCaterCore/     协议编解码、HID 传输、链路监测（不依赖 UI）
-  AntiCaterApp/      SwiftUI 界面
+  AntiCaterCore/     协议编解码、HID 传输、链路监测、更新检查（不依赖 UI）
+  AntiCaterUI/       SwiftUI 界面与 DeviceModel
+  AntiCaterApp/      可执行目标，只有 main.swift
   anticater-dump/    命令行工具，读取当前配置
   anticater-restore/ 应急工具，会无条件覆盖左右旋配置，使用前请阅读源码注释
-Tests/               协议层回归测试
+Tests/
+  AntiCaterCoreTests/  协议编解码与版本比较
+  AntiCaterUITests/    DeviceModel 状态机，用假设备模拟拔线与写入失败
+Tools/               图标生成脚本
 ```
+
+界面单独成库（`AntiCaterUI`）而不是直接放在可执行目标里，唯一目的是让 `DeviceModel` 能被测试引用 —— SwiftPM 的 executableTarget 无法作为测试依赖。
 
 ## 协议说明
 
