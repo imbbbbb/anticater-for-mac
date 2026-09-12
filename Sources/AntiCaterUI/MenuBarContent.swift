@@ -150,7 +150,7 @@ public struct MenuBarContent: View {
         switch (model.links.usb, model.links.bluetooth) {
         case (true, true):   return "旋钮已连接：数据线 + 蓝牙"
         case (true, false):  return "旋钮已连接：数据线"
-        case (false, true):  return "旋钮已连接：蓝牙（改配置需插线）"
+        case (false, true):  return "旋钮已连接：蓝牙（读写配置都需插线）"
         case (false, false): return "未检测到旋钮"
         }
     }

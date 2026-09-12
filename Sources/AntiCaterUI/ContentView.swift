@@ -21,7 +21,9 @@ public struct ContentView: View {
         }
         .toolbar { toolbar }
         .frame(minWidth: 780, minHeight: 560)
-        .onAppear { model.connect() }
+        // 开窗即连，但失败要静默：主窗口每显示一次就会走一遍这里（菜单栏 app
+        // 关窗再开是常事），没插线的人会被反复拦住。占位页已经在讲该怎么做了。
+        .onAppear { model.connect(silentOnFailure: true) }
         .onChange(of: model.errorMessage) { showError = $0 != nil }
         .animation(.easeOut(duration: 0.18), value: model.message)
         .confirmationDialog("把 \(model.changeCount) 项改动写入旋钮？",
@@ -109,7 +111,10 @@ public struct ContentView: View {
                           ? "USB 线已插好，可以改配置" : "USB 线没插——改配置必须插线")
             linkBadge("蓝牙", systemImage: "dot.radiowaves.left.and.right",
                       on: model.links.bluetooth,
-                      help: model.links.bluetooth ? "旋钮已通过蓝牙连上这台电脑" : "蓝牙未连接")
+                      help: model.links.bluetooth
+                          ? "旋钮已通过蓝牙连上这台电脑。蓝牙链路上没有配置通道，"
+                            + "读写配置都要插 USB 线"
+                          : "蓝牙未连接")
         }
         .frame(maxWidth: .infinity)
     }
@@ -200,7 +205,10 @@ public struct ContentView: View {
         if case .connected(let name, let serial, let firmware) = model.connection {
             return "\(name)\n序列号 \(serial)\n固件 \(firmware)"
         }
-        return "用 USB 线把旋钮接到电脑上"
+        if model.links.bluetooth {
+            return "蓝牙已连接，但配置通道只在 USB 上\n插上数据线会自动连接"
+        }
+        return "用 USB 数据线把旋钮接到电脑上，会自动连接"
     }
 
     // MARK: - 瞬时提示

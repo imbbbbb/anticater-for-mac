@@ -174,7 +174,7 @@ public final class DeviceModel: ObservableObject {
                     self.worker.run { try session.writeLight(mode: previous, palette: palette) }
                         completion: { _ in }
                 }
-                self.errorMessage = "切换灯效失败：" + Self.friendly(error)
+                self.errorMessage = "切换灯效失败：" + Self.friendly(error, links: self.links)
             }
         }
     }
@@ -244,7 +244,18 @@ public final class DeviceModel: ObservableObject {
                 EventLog.shared.log("界面", "连接失败：\(error)")
                 // 插线触发的自动重连不该弹窗——用户没点任何东西，凭空跳个报错
                 // 只会吓人。安静退回未连接，工具栏里还有「连接旋钮」可以手动来。
-                if !silentOnFailure { self.errorMessage = Self.friendly(error) }
+                guard !silentOnFailure else { break }
+
+                // 「没插线」不是错误，是预期状态，而且编辑区的占位页正在讲这件事。
+                // 用模态弹窗说它，等于每次打开窗口都拦一道——只连蓝牙用旋钮的人
+                // 每天都要关一次。降级成会自己消失的浮层提示，说一次就够。
+                if Self.isNotFound(error) {
+                    self.message = self.links.bluetooth
+                        ? "蓝牙链路上没有配置通道，插上 USB 数据线才能读写配置"
+                        : "没找到旋钮，请插上 USB 数据线"
+                } else {
+                    self.errorMessage = Self.friendly(error, links: self.links)
+                }
             }
         }
     }
@@ -263,7 +274,7 @@ public final class DeviceModel: ObservableObject {
                 self.message = "已重新读取"
             case .failure(let error):
                 self.dropSessionIfStale(error)
-                self.errorMessage = Self.friendly(error)
+                self.errorMessage = Self.friendly(error, links: self.links)
             }
         }
     }
@@ -328,7 +339,7 @@ public final class DeviceModel: ObservableObject {
                 // 句柄失效的话必须断开重连，否则重试多少次都是同一个错。
                 // draft 一律保留，改动不会因为掉线而丢。
                 self.dropSessionIfStale(error)
-                self.errorMessage = "写入失败：" + Self.friendly(error)
+                self.errorMessage = "写入失败：" + Self.friendly(error, links: self.links)
             }
         }
     }
@@ -349,8 +360,27 @@ public final class DeviceModel: ObservableObject {
         return true
     }
 
+    /// 「系统里就没有这个设备」这一类。和「设备在但打不开」要分开：
+    /// 前者是没插线的日常状态，后者才是真出了事。
+    ///
+    /// **按 case 匹配，不要去搜 `"\(error)"` 里有没有 "notFound"。**
+    /// `Failure` 实现了 `CustomStringConvertible`，插值出来的是中文描述，
+    /// 字符串判断永远不成立——之前这里就是这么写的，那个分支从来没生效过，
+    /// 用户看到的一直是底层原文。
+    static func isNotFound(_ error: Error) -> Bool {
+        if case HIDTransport.Failure.notFound = error { return true }
+        if case HIDTransport.Failure.openFailed(let r) = error {
+            return r == kIOReturnNoDevice || r == kIOReturnNotAttached
+        }
+        return false
+    }
+
     /// IOKit 只会甩一串十六进制错误码回来，直接显示给用户没有意义，这里翻成人话。
-    static func friendly(_ error: Error) -> String {
+    ///
+    /// - Parameter links: 说清「找不到」到底是哪一种找不到时要用。同一个
+    ///   `notFound` 在「什么都没插」和「蓝牙连着但没插线」两种情形下，
+    ///   对用户意味着完全不同的事。
+    static func friendly(_ error: Error, links: LinkStatus = LinkStatus()) -> String {
         let text = "\(error)"
         if text.contains("E00002C5") || text.lowercased().contains("exclusive") {
             return "旋钮被别的程序占着（多半是原版 ANTICATER 软件还开着）。"
@@ -361,12 +391,21 @@ public final class DeviceModel: ObservableObject {
         if text.contains("E00002C2") || text.contains("E00002C0")
             || text.contains("E00002CD") || text.contains("E00002D9") {
             return "和旋钮的连接已经断了（中途拔过数据线）。已自动断开，"
-                 + "插好线后点「连接旋钮」即可，你的改动还在编辑区。"
+                 + "插回线就会自动接上，你的改动还在编辑区。"
         }
-        if text.contains("notFound") || text.contains("noDevice") {
-            return "没找到旋钮。改配置必须走 USB 数据线——只连蓝牙或 2.4G 接收器不行，"
-                 + "另外有些线只能充电、不能传数据，可以换一根试试。"
-                 + "确认线没问题还是连不上的话，点「拷贝诊断信息」把结果发给维护者。"
+        if Self.isNotFound(error) {
+            // 蓝牙在线时不能说「没找到旋钮」——界面上蓝牙徽标正亮着，
+            // 这么说等于自相矛盾，用户只会以为软件坏了。
+            // 也不能只说「改配置要插线」：固件在蓝牙上根本没开 0xFF00 这一页，
+            // 读配置和写配置走的是同一条通道，一起失效。说成只有写受限，
+            // 用户会合理地期待至少能读出来。
+            if links.bluetooth {
+                return "旋钮正通过蓝牙连着，但配置读不到——蓝牙这条链路上没有配置通道，"
+                     + "读取和修改都只能走 USB 数据线。插上线即可，无需手动点连接。"
+            }
+            return "没找到旋钮。配置通道只存在于 USB 数据线上——只连蓝牙或 2.4G 接收器"
+                 + "都读不到也改不了。另外有些线只能充电、不能传数据，可以换一根试试。"
+                 + "确认线没问题还是连不上的话，点「查看诊断信息…」把结果发给维护者。"
         }
         return text
     }

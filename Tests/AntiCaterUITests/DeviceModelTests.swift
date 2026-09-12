@@ -201,6 +201,41 @@ final class DeviceModelTests: XCTestCase {
         XCTAssertEqual(fake.handshakeCount, 0)
     }
 
+    /// 没插线不该弹模态框。主窗口每显示一次就连一次，只用蓝牙的人会被反复拦住；
+    /// 这是预期状态，编辑区的占位页已经在讲该怎么做了。
+    func testDeviceNotFoundDoesNotRaiseModalError() {
+        let model = DeviceModel(worker: ImmediateRunner(), monitorLinks: false,
+                                makeSession: { throw HIDTransport.Failure.notFound })
+        model.connect()
+
+        XCTAssertNil(model.errorMessage)
+        XCTAssertNotNil(model.message)
+        XCTAssertFalse(model.connection.isConnected)
+    }
+
+    /// 蓝牙在线时不能说「没找到旋钮」——界面上蓝牙徽标正亮着。
+    /// 也不能说成只有写受限：0xFF00 在蓝牙上根本不存在，读写一起没有。
+    func testBluetoothOnlyMessageDoesNotClaimDeviceIsMissing() {
+        let text = DeviceModel.friendly(HIDTransport.Failure.notFound,
+                                        links: LinkStatus(usb: false, bluetooth: true))
+        XCTAssertFalse(text.contains("没找到旋钮"))
+        XCTAssertTrue(text.contains("蓝牙"))
+        XCTAssertTrue(text.contains("读取"))
+    }
+
+    /// 设备在、但被别的进程占着，是真错误：退出那个程序不会产生插拔事件，
+    /// 所以这一条必须留在模态框里，并且要指向手动的「连接旋钮」。
+    func testExclusiveAccessStillRaisesModalError() {
+        let model = DeviceModel(worker: ImmediateRunner(), monitorLinks: false,
+                                makeSession: {
+                                    throw HIDTransport.Failure.openFailed(kIOReturnExclusiveAccess)
+                                })
+        model.connect()
+
+        XCTAssertNotNil(model.errorMessage)
+        XCTAssertTrue(model.errorMessage?.contains("连接旋钮") == true)
+    }
+
     // MARK: - 编辑区
 
     func testDiscardChangesRestoresBaseline() {

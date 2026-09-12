@@ -78,15 +78,31 @@ struct EditorView: View {
         }
     }
 
+    /// 空状态。**不要在这里教用户点「连接旋钮」**——插线会自动连上
+    /// （`DeviceModel.handleLinkChange`），那个按钮只是原版软件占用等
+    /// 收不到插拔事件时的兜底。把兜底写成正常路径，用户会以为插了线还得手动操作。
     private var placeholder: some View {
         VStack(spacing: 12) {
-            Image(systemName: "dial.medium")
+            Image(systemName: model.links.bluetooth ? "dot.radiowaves.left.and.right"
+                                                    : "cable.connector")
                 .font(.system(size: 42, weight: .ultraLight))
                 .foregroundStyle(.tertiary)
-            Text("未连接旋钮").font(.title3)
-            Text("用 USB 线把旋钮接到电脑，再点右上角的连接按钮。")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+
+            if model.links.bluetooth {
+                // 蓝牙亮着的时候说「未连接旋钮」会和徽标打架。
+                // 这里的实情是：连着，但这条链路上没有配置通道。
+                Text("蓝牙已连接，但读不到配置").font(.title3)
+                Text("蓝牙链路上没有配置通道，读取和修改都只能走 USB 数据线。\n"
+                   + "插上线会自动连接。")
+                    .multilineTextAlignment(.center)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("未连接旋钮").font(.title3)
+                Text("用 USB 数据线把旋钮接到电脑，会自动连接。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)

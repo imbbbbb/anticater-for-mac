@@ -45,7 +45,9 @@ No privacy permissions such as Input Monitoring are required: the configuration 
 
 ## Usage
 
-A USB cable is required to change the configuration. The Bluetooth side is a separate HID device and does not expose the `0xFF00` configuration interface.
+**A USB cable is required both to read and to change the configuration.** The Bluetooth side is a separate HID device whose report descriptor declares only three top-level collections — digitizer, keyboard and consumer — with no vendor-defined `0xFF00` page. Reading and writing the configuration use the same channel, so neither works over Bluetooth. The original software behaves the same way here, showing only "please connect the device with a data cable".
+
+The app connects automatically as soon as the cable is plugged in. The "连接旋钮" (Connect) item in the toolbar is only for cases where no plug event arrives — for example after quitting the original software that was holding the device.
 
 Pick a knob action on the left, choose a type and adjust its settings on the right, then commit with "写入旋钮" (Write to knob) in the top-right corner. Edits are staged and can be discarded at any point before committing; after writing, the app reads the configuration back and verifies it, listing explicitly anything that did not take effect.
 
