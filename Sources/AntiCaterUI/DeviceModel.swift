@@ -194,6 +194,8 @@ public final class DeviceModel: ObservableObject {
     ///   拔插线自动重连时用得上：连接断过不代表用户想丢掉改到一半的东西。
     public func connect(preservingDraft: Bool = false, silentOnFailure: Bool = false) {
         guard !busy else { return }
+        EventLog.shared.log("界面",
+            "开始连接（\(silentOnFailure ? "插拔自动重连" : "用户主动")）")
         // 重连前先把旧的关掉，否则设备会被同一个进程开两次，旧句柄也没人注销回调。
         invalidateSession(reason: nil)
         busy = true
@@ -239,6 +241,7 @@ public final class DeviceModel: ObservableObject {
                 // session 已经在 worker 里关掉了，这里只要把界面状态摆正。
                 self.session = nil
                 self.connection = .disconnected
+                EventLog.shared.log("界面", "连接失败：\(error)")
                 // 插线触发的自动重连不该弹窗——用户没点任何东西，凭空跳个报错
                 // 只会吓人。安静退回未连接，工具栏里还有「连接旋钮」可以手动来。
                 if !silentOnFailure { self.errorMessage = Self.friendly(error) }
@@ -303,8 +306,15 @@ public final class DeviceModel: ObservableObject {
 
                 if rejected.isEmpty {
                     self.apply(layers: layers)
+                    EventLog.shared.log("界面", "写入 \(total) 项，回读校验全部通过")
                     self.message = "已写入 \(total) 项，回读校验通过"
                 } else {
+                    // 这是最需要日志的一类问题：没报错，但配置没进去。
+                    // 记下标即可定位到上面 Session.write 那几条，对照着看发了什么。
+                    EventLog.shared.log("界面",
+                        "写入 \(total) 项，其中 \(rejected.count) 项回读不一致："
+                        + rejected.map { "[\(String(format: "%02d", Int($0.index)))]" }
+                            .joined(separator: " "))
                     // 只把基线换成设备的真实状态，**保留 draft**：没写进去的那几项
                     // 仍然是脏的，用户不必重编一遍，再点一次写入就行。
                     self.saved = layers
@@ -354,7 +364,9 @@ public final class DeviceModel: ObservableObject {
                  + "插好线后点「连接旋钮」即可，你的改动还在编辑区。"
         }
         if text.contains("notFound") || text.contains("noDevice") {
-            return "没找到旋钮。改配置必须走 USB 数据线，只连蓝牙不行。"
+            return "没找到旋钮。改配置必须走 USB 数据线——只连蓝牙或 2.4G 接收器不行，"
+                 + "另外有些线只能充电、不能传数据，可以换一根试试。"
+                 + "确认线没问题还是连不上的话，点「拷贝诊断信息」把结果发给维护者。"
         }
         return text
     }

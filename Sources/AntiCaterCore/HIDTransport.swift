@@ -74,30 +74,72 @@ public final class HIDTransport {
         (IOHIDDeviceGetProperty(device, key as CFString) as? NSNumber)?.intValue
     }
 
-    /// 交给 IOKit 在内核侧做筛选的匹配条件：受支持的 VID/PID，且必须是 0xFF00 配置接口。
+    /// 交给 IOKit 在内核侧做筛选的匹配条件：受支持的 VID/PID。
     ///
     /// 早先这里传的是 `nil`（匹配全部 HID 设备）再在 Swift 侧过滤，等于把系统上
-    /// 每一个键鼠都拿到手里再扔掉。改成显式匹配后只会拿到目标接口。
+    /// 每一个键鼠都拿到手里再扔掉。改成显式匹配后只会拿到这台设备的接口。
+    ///
+    /// **不要再往这里加 `kIOHIDPrimaryUsagePageKey: 0xFF00`。** 见 `hasConfigUsage`。
     static var configMatchingCriteria: [[String: Any]] {
         supportedIDs.map { ids in
-            [kIOHIDVendorIDKey: ids.vid,
-             kIOHIDProductIDKey: ids.pid,
-             kIOHIDPrimaryUsagePageKey: configUsagePage,
-             kIOHIDPrimaryUsageKey: configUsage]
+            [kIOHIDVendorIDKey: ids.vid, kIOHIDProductIDKey: ids.pid]
         }
     }
 
-    /// 找到第一个匹配的配置接口。复合设备里键盘接口不在匹配条件内，不会被返回。
+    /// 这个 `IOHIDDevice` 上有没有 0xFF00/0x01 配置集合。
+    ///
+    /// 必须查 `DeviceUsagePairs`，**不能只看 `PrimaryUsagePage`**。macOS 里一个
+    /// USB 接口对应一个 `IOHIDDevice`，接口上若有多个顶层集合（键盘 + 消费者 +
+    /// 厂商页），`PrimaryUsagePage` 只等于**排在最前面那个**集合的页号，其余的只
+    /// 出现在 `DeviceUsagePairs` 里。开发机上 0xFF00 恰好是 primary，换一台固件
+    /// 集合顺序不同的设备，按 primary 匹配就一个都找不到，界面报「没找到旋钮」。
+    /// 原版程序用的 hidapi 正是按 usage pair 逐条枚举的，这里与它对齐。
+    ///
+    /// 代价：0xFF00 若与键盘集合同处一个接口，`IOHIDDeviceOpen` 打开的就是那个
+    /// 接口，可能触发「输入监控」授权。原版同样如此（hidapi 打开的是同一个
+    /// `IOHIDDevice`），属于行为对齐而非退步；本机设备不在此列。
+    static func hasConfigUsage(_ device: IOHIDDevice) -> Bool {
+        if let pairs = IOHIDDeviceGetProperty(device, kIOHIDDeviceUsagePairsKey as CFString)
+            as? [[String: Any]] {
+            let matched = pairs.contains { pair in
+                (pair[kIOHIDDeviceUsagePageKey] as? NSNumber)?.intValue == configUsagePage
+                    && (pair[kIOHIDDeviceUsageKey] as? NSNumber)?.intValue == configUsage
+            }
+            if matched { return true }
+        }
+        // 少数驱动不提供 DeviceUsagePairs，退回单值属性。
+        return intProperty(device, kIOHIDPrimaryUsagePageKey) == configUsagePage
+            && intProperty(device, kIOHIDPrimaryUsageKey) == configUsage
+    }
+
+    /// 找到第一个带配置集合的接口。复合设备里纯键盘接口没有 0xFF00，会被滤掉。
     public static func discover() -> HIDTransport? {
         let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
         IOHIDManagerSetDeviceMatchingMultiple(manager, configMatchingCriteria as CFArray)
-        guard let devices = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> else { return nil }
+        // Open 一下再枚举：未 open 的 manager，`CopyDevices` 的返回内容 Apple 没有
+        // 保证，实测有机器上首次调用拿到空集。这里 open 的是 manager 而不是设备，
+        // 不涉及任何权限。失败也继续——大多数机器上不 open 照样能枚举。
+        _ = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+        defer { IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone)) }
 
+        guard let devices = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> else {
+            EventLog.shared.log("发现", "CopyDevices 返回 nil，系统里没有匹配 VID/PID 的设备")
+            return nil
+        }
+
+        // 命中 VID/PID 但没有配置集合的接口要单独记一笔：它正好区分了
+        // 「设备根本没插」和「设备在、但配置通道没找到」这两种症状。
+        var rejected = 0
         for device in devices {
             guard let vid = intProperty(device, kIOHIDVendorIDKey),
                   let pid = intProperty(device, kIOHIDProductIDKey) else { continue }
+            guard hasConfigUsage(device) else { rejected += 1; continue }
+            EventLog.shared.log("发现", String(format: "选中配置接口 0x%04X:0x%04X", vid, pid))
             return HIDTransport(device: device, vid: vid, pid: pid)
         }
+        EventLog.shared.log("发现",
+            "没有找到配置接口（VID/PID 命中但无 FF00:01 的接口 \(rejected) 个，"
+            + "系统 HID 设备共 \(devices.count) 个）")
         return nil
     }
 
@@ -131,6 +173,8 @@ public final class HIDTransport {
                                          CFRunLoopMode.defaultMode.rawValue)
         IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone))
         scheduledRunLoop = nil
+        // 未取走的报文数留个记录：非零说明上一次操作收多了或者读少了。
+        EventLog.shared.log("关闭", "设备已关闭（未取走的报文 \(inbox.count) 条）")
         inbox.removeAll()
     }
 
@@ -156,8 +200,13 @@ public final class HIDTransport {
         guard !opened else { return }
         guard let inputBuffer else { return }
         let rc = IOHIDDeviceOpen(device, IOOptionBits(kIOHIDOptionsTypeNone))
-        guard rc == kIOReturnSuccess else { throw Failure.openFailed(rc) }
+        guard rc == kIOReturnSuccess else {
+            EventLog.shared.log("打开", String(format: "IOHIDDeviceOpen 失败 0x%08X",
+                                               UInt32(bitPattern: rc)))
+            throw Failure.openFailed(rc)
+        }
         opened = true
+        EventLog.shared.log("打开", "设备已打开")
 
         let context = Unmanaged.passUnretained(self).toOpaque()
         IOHIDDeviceRegisterInputReportCallback(
@@ -170,6 +219,8 @@ public final class HIDTransport {
                     let dump = bytes.prefix(16).map { String(format: "%02X", $0) }.joined(separator: " ")
                     FileHandle.standardError.write("← len=\(bytes.count)  \(dump)\n".data(using: .utf8)!)
                 }
+                // 收到的报文里有用户配置的键码，属于载荷，只在 verbose 下记。
+                EventLog.shared.logVerbose("收", "len=\(bytes.count)  \(EventLog.hex(bytes))")
                 transport.inbox.append(bytes)
             },
             context)
@@ -191,7 +242,15 @@ public final class HIDTransport {
         buffer.append(contentsOf: repeatElement(0, count: Self.payloadSize - payload.count))
         let rc = IOHIDDeviceSetReport(device, kIOHIDReportTypeOutput, CFIndex(Self.reportID),
                                       buffer, buffer.count)
-        guard rc == kIOReturnSuccess else { throw Failure.writeFailed(rc) }
+        guard rc == kIOReturnSuccess else {
+            // 失败必须记，且要带上命令字节（payload 头两字节是命令码，不含用户数据），
+            // 否则只知道「写失败了」，不知道失败在哪条命令上。
+            EventLog.shared.log("发", String(format: "SetReport 失败 0x%08X  命令 %@",
+                                             UInt32(bitPattern: rc),
+                                             EventLog.hex(Array(payload.prefix(2)))))
+            throw Failure.writeFailed(rc)
+        }
+        EventLog.shared.logVerbose("发", EventLog.hex(payload))
     }
 
     /// 收集接下来的 `count` 条输入报文，返回去掉 Report ID 的载荷。
@@ -205,6 +264,9 @@ public final class HIDTransport {
         guard inbox.count >= count else {
             let partial = inbox.count
             inbox.removeAll()
+            // 「期望几条、实到几条」是判断超时性质的关键：一条没收到多半是设备没响应，
+            // 收到一半通常是设备还在吐但慢了。
+            EventLog.shared.log("收", "超时：期望 \(count) 条，实到 \(partial) 条")
             throw Failure.timeout(expected: count, got: partial)
         }
         let batch = Array(inbox.prefix(count))

@@ -40,3 +40,7 @@ try restore(.rotateLeft,
 try restore(.rotateRight,
             to: Proto.Binding(index: PhysicalKey.rotateRight.rawValue, layer: 1,
                               type: .media, code: 0xE9))
+
+// 顶层代码里不能用 defer 兜底（抛错时不会走到这），但这里抛错本来就该带着
+// 「未经 close() 即释放」的告警退出——那正是需要被看见的信号。
+session.close()

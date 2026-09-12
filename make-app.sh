@@ -19,6 +19,10 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/AntiCater"
 
+# 把只读的 dump 工具一起装进包里。它带 --diagnose，是「插上了却连不上」时
+# 唯一能拿到证据的手段；只放在源码仓库里等于普通用户用不上。
+cp "$(dirname "$BIN")/anticater-dump" "$APP/Contents/MacOS/anticater-dump"
+
 # 图标由 Tools/make-icon.sh 生成并入库。缺了也能打包，只是 Dock 里是白板。
 if [ -f Resources/AppIcon.icns ]; then
     cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"

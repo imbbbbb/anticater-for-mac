@@ -3,6 +3,7 @@ import AntiCaterCore
 
 public struct ContentView: View {
     @ObservedObject var model: DeviceModel
+    @Environment(\.openWindow) private var openWindow
     @State private var confirmWrite = false
     @State private var confirmClearAll = false
     @State private var showError = false
@@ -38,6 +39,13 @@ public struct ContentView: View {
             Text("只改编辑区，点「写入旋钮」之前都可以撤回。")
         }
         .alert("出错了", isPresented: $showError) {
+            // 连不上时远程排障全靠这个。放在报错弹窗里而不是只在菜单深处，
+            // 因为需要它的时刻就是这一刻。
+            // 打开窗口而不是直接拷贝：让用户先看清要发出去的是什么再决定拷不拷。
+            Button("查看诊断信息…") {
+                NSApp.activate(ignoringOtherApps: true)
+                openWindow(id: "diagnostics")
+            }
             Button("好") { model.errorMessage = nil }
         } message: {
             Text(model.errorMessage ?? "")

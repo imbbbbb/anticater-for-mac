@@ -7,8 +7,32 @@ func hex(_ bytes: [UInt8]) -> String {
     bytes.map { String(format: "%02X", $0) }.joined(separator: " ")
 }
 
+// `--diagnose` 先**尝试**连一次再出报告，但连不上也照样出——用户跑它的时候
+// 十有八九就是连不上，报告不能依赖「先连上」。
+//
+// 之所以要主动试一次：报告里的事件日志本来就是为了回答「连的时候发生了什么」。
+// 直接打印报告的话日志永远是空的，等于白留一栏。这一次尝试会把选中了哪个接口、
+// IOHIDDeviceOpen 的返回码、握手有没有超时全部记进去。
+//
+// 全程只读：只有 discover / open / handshake，不写任何配置。
+if CommandLine.arguments.contains("--diagnose") {
+    do {
+        let session = try Session.connect()
+        defer { session.close() }
+        try session.handshake()
+    } catch {
+        EventLog.shared.log("诊断", "连接尝试失败：\(error)")
+    }
+    print(Diagnostics.report())
+    exit(0)
+}
+
 do {
     let session = try Session.connect()
+    // 漏了 close() 的话 HIDTransport 的 deinit 会往 stderr 打一行「未经 close() 即释放」，
+    // 用户跑 --diagnose 排障时第一眼就看到这个，像是工具自己坏了。
+    // CLI 全程在主线程，close() 的同线程要求天然满足。
+    defer { session.close() }
     let transport = session.transport
     print(String(format: "已连接  VID=0x%04X PID=0x%04X  序列号 %@",
                  transport.vendorID, transport.productID, transport.serialNumber ?? "-"))

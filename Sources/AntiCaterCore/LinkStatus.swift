@@ -33,14 +33,14 @@ public struct LinkStatus: Equatable {
             let transport = IOHIDDeviceGetProperty(device, kIOHIDTransportKey as CFString) as? String
             let name = IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) as? String
 
-            // 只认 0xFF00 那个配置接口。复合设备的键盘/多媒体接口 VID/PID 一样，
+            // 只认带 0xFF00 配置集合的接口。复合设备的键盘/多媒体接口 VID/PID 一样，
             // 光比 VID/PID 的话，即使配置通道不可用徽标也会亮，
             // 界面就会骗用户说「可以改配置」。
-            let usagePage = IOHIDDeviceGetProperty(
-                device, kIOHIDPrimaryUsagePageKey as CFString) as? Int
+            // 判据必须和 `HIDTransport.discover()` 用同一个——否则会出现徽标亮着
+            // 但连接按钮报「没找到旋钮」（或反过来）的自相矛盾。
             if let vendor, let product,
                HIDTransport.supportedIDs.contains(where: { $0.vid == vendor && $0.pid == product }),
-               usagePage == HIDTransport.configUsagePage {
+               HIDTransport.hasConfigUsage(device) {
                 status.usb = true
             }
             // 蓝牙侧借用了苹果的 VID，光看 VID/PID 会误伤真苹果外设，所以认名字。

@@ -6,7 +6,7 @@ A native macOS configuration tool for the ANTICATER desktop volume knob. Built o
 
 The original app ships as an x86_64-only Qt program and therefore depends on Rosetta 2 on Apple Silicon, which is being removed in macOS 28. This project provides a native arm64 implementation with an interface redesigned to follow macOS conventions.
 
-Version 1.1 · Requires macOS 13 or later · Noncommercial use only
+Version 1.2 · Requires macOS 13 or later · Noncommercial use only
 
 ---
 
@@ -34,7 +34,12 @@ Configuration is stored in the knob's own firmware. Once written, this app does 
 
 Download the DMG from [Releases](../../releases) and drag the app into Applications.
 
-The app is ad-hoc signed. There is no Apple Developer certificate and it is not notarized, so Gatekeeper will block the first launch. Right-click the icon, choose Open, then click Open again in the system dialog — double-clicking will not get through.
+The app is ad-hoc signed. There is no Apple Developer certificate and it is not notarized, so Gatekeeper will block the first launch:
+
+- macOS 14 and earlier: right-click the icon, choose Open, then click Open again in the system dialog.
+- macOS 15 and later: right-click Open no longer offers a bypass. Double-click once (it will be refused), then go to System Settings → Privacy & Security, find the app near the bottom, and click "Open Anyway".
+
+The app is arm64-only and **requires Apple Silicon**. It will not run on Intel Macs.
 
 No privacy permissions such as Input Monitoring are required: the configuration channel lives on the vendor-defined usage page `0xFF00`, not the keyboard page.
 
@@ -45,6 +50,38 @@ A USB cable is required to change the configuration. The Bluetooth side is a sep
 Pick a knob action on the left, choose a type and adjust its settings on the right, then commit with "写入旋钮" (Write to knob) in the top-right corner. Edits are staged and can be discarded at any point before committing; after writing, the app reads the configuration back and verifies it, listing explicitly anything that did not take effect.
 
 If the cable is unplugged mid-session the app disconnects and keeps your staged edits, then reconnects automatically when it is plugged back in.
+
+### When it will not connect
+
+If the app reports that no knob was found, check in this order:
+
+1. Confirm you are connected over a USB cable, not Bluetooth or a 2.4 GHz receiver — the configuration channel only exists on the USB interface.
+2. Try a different cable. Some cables carry power only; the knob lights up but never enumerates as a USB device.
+3. Bypass docks and USB hubs; plug directly into the machine.
+4. Quit the original ANTICATER software. The device cannot be opened while another process holds it.
+
+If it still will not connect, open "诊断信息…" (Diagnostics) from the menu bar — the error dialog's "查看诊断信息…" (View diagnostics) opens the same window — review the contents, then click "拷贝全部" (Copy all) and paste the result into an [issue](../../issues). The diagnostics contain:
+
+- This machine's HID device list: vendor ID, product ID, usage pairs, transport
+- An event log for the current run: connect, open, read and write operations and their outcomes, capped at the most recent 500 entries
+
+The event log lives in memory only. It is never written to disk and is gone when the app quits. It keeps the most recent 500 entries and overwrites older ones, so it never grows without bound and needs no periodic cleanup.
+
+By default the log does **not** record report contents, so it contains none of your key bindings or macros. If a protocol-level problem needs digging into, do it in this order:
+
+1. Turn on "记录详细日志" (Verbose logging) in the diagnostics window;
+2. Go back and **reproduce the problem once more**;
+3. Return to the diagnostics window, click "刷新" (Refresh), then "拷贝全部" (Copy all).
+
+The switch only affects operations that happen after it is enabled; it does not backfill entries already recorded — doing this out of order yields a log with no reports in it. The switch is not persisted and resets when the app restarts.
+
+Nothing is uploaded automatically — the report is only placed on the clipboard when you click "拷贝全部".
+
+The same report is available from the terminal:
+
+```bash
+"/Applications/ANTICATER 原生版.app/Contents/MacOS/anticater-dump" --diagnose
+```
 
 ## Network activity
 

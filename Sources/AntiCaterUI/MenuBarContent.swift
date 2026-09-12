@@ -17,6 +17,7 @@ public struct MenuBarContent: View {
     /// 一次启动只自动查一次，菜单反复打开不该反复发请求。
     @State private var didAutoCheck = false
 
+
     public init(model: DeviceModel) { self.model = model }
 
     public var body: some View {
@@ -83,6 +84,20 @@ public struct MenuBarContent: View {
         if let launchError {
             Text("设置自启失败：\(launchError)")
         }
+
+        Divider()
+
+        // 排障入口。放在菜单栏而不是只放在报错弹窗里，是因为有些问题不报错——
+        // 比如写进去了但旋钮行为不对，用户此时没有弹窗可点。
+        //
+        // 只留一个入口指向诊断窗口：拷贝和详细日志开关都在窗口里，
+        // 菜单里再摆一份就成了两套名字相近、行为又不完全一样的动作。
+        Button("诊断信息…") {
+            NSApp.activate(ignoringOtherApps: true)
+            openWindow(id: "diagnostics")
+        }
+
+        Button("反馈问题…") { NSWorkspace.shared.open(Diagnostics.issuesPage) }
 
         Divider()
 
