@@ -236,6 +236,42 @@ final class DeviceModelTests: XCTestCase {
         XCTAssertTrue(model.errorMessage?.contains("连接旋钮") == true)
     }
 
+    /// issue #1：固件 0x00 的机器握手正常、三层配置也全读到了，唯独不应答读调色板，
+    /// 结果整次连接失败，用户连按键都改不了。灯效是附带功能，不该有权否决主功能。
+    func testLightReadTimeoutStillConnectsAndKeepsConfig() {
+        let fake = FakeSession()
+        fake.readLightError = HIDTransport.Failure.timeout(expected: 1, got: 0)
+        let model = DeviceModel(worker: ImmediateRunner(), monitorLinks: false,
+                                makeSession: { fake })
+        model.connect()
+
+        XCTAssertTrue(model.connection.isConnected)
+        XCTAssertNil(model.errorMessage)
+        // 按键配置必须照常可用——这才是这个 app 存在的理由。
+        XCTAssertEqual(model.binding(.rotateLeft, in: 1)?.index, PhysicalKey.rotateLeft.rawValue)
+        // 灯效整块标为不可用，界面据此禁掉，而不是留个点不动的选择器。
+        XCTAssertFalse(model.lightAvailable)
+    }
+
+    /// 读不到灯效时不许下发灯效命令——设备都没应答读，写过去只会是瞎猜。
+    func testLightWriteIsRefusedWhenUnsupported() {
+        let fake = FakeSession()
+        fake.readLightError = HIDTransport.Failure.timeout(expected: 1, got: 0)
+        let model = DeviceModel(worker: ImmediateRunner(), monitorLinks: false,
+                                makeSession: { fake })
+        model.connect()
+        model.setLight(mode: 3)
+
+        XCTAssertEqual(model.lightMode, 0)
+        XCTAssertNil(model.errorMessage)
+    }
+
+    /// 正常固件不受影响：读得到就照常可用。
+    func testLightAvailableOnHealthyFirmware() {
+        let (model, _) = makeModel()
+        XCTAssertTrue(model.lightAvailable)
+    }
+
     // MARK: - 编辑区
 
     func testDiscardChangesRestoresBaseline() {

@@ -19,6 +19,9 @@ final class FakeSession: DeviceSession {
     var handshakeError: Error?
     var writeError: Error?
     var readError: Error?
+    /// 单独一个：issue #1 那台设备读配置正常、只有读灯效不应答，
+    /// 和 `readError` 共用就没法复现「三层都读到了，唯独灯效超时」。
+    var readLightError: Error?
     var writeLightError: Error?
 
     /// 回读时故意少给一层，模拟设备返回残缺数据。
@@ -65,7 +68,7 @@ final class FakeSession: DeviceSession {
     }
 
     func readLight() throws -> (mode: UInt8, palette: [(r: UInt8, g: UInt8, b: UInt8)]) {
-        try take(&readError)
+        try take(&readLightError)
         return light
     }
 

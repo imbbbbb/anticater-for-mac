@@ -49,7 +49,7 @@ public struct MenuBarContent: View {
                 }
             }
         }
-        .disabled(!model.connection.isConnected)
+        .disabled(!model.connection.isConnected || !model.lightAvailable)
 
         Button("打开主窗口") {
             NSApp.activate(ignoringOtherApps: true)

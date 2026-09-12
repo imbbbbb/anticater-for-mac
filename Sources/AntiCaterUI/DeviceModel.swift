@@ -25,6 +25,9 @@ public final class DeviceModel: ObservableObject {
     @Published private(set) var lightMode: UInt8 = 0
     @Published private(set) var palette: [Color] = []
     private var rawPalette: [(r: UInt8, g: UInt8, b: UInt8)] = []
+    /// 这台固件认不认灯效命令。读调色板超时就置 false，界面据此把灯效整块禁掉——
+    /// 见 `readLightIfSupported`。
+    @Published private(set) var lightAvailable = false
 
     /// USB / 蓝牙两条链路各自在不在线。插拔事件驱动，只读，不打开设备。
     @Published public private(set) var links = LinkStatus()
@@ -103,6 +106,8 @@ public final class DeviceModel: ObservableObject {
         }
         session = nil
         connection = .disconnected
+        // 灯效支持与否是「这台设备」的属性，换一台就不作数了。
+        lightAvailable = false
         if let reason { message = reason }
     }
 
@@ -152,7 +157,7 @@ public final class DeviceModel: ObservableObject {
     /// 换灯效。灯光是即时可见、随时可改回的，没必要走「攒改动 → 确认 → 写入」那一套，
     /// 所以选完直接下发；写失败再退回设备上的旧值。
     func setLight(mode: UInt8) {
-        guard let session, mode != lightMode else { return }
+        guard let session, lightAvailable, mode != lightMode else { return }
         let previous = lightMode
         let palette = rawPalette
         lightMode = mode
@@ -187,7 +192,23 @@ public final class DeviceModel: ObservableObject {
         let serial: String
         let firmware: String
         let layers: [UInt8: [Proto.Binding]]
-        let light: (mode: UInt8, palette: [(r: UInt8, g: UInt8, b: UInt8)])
+        /// 读不到就是 nil。**不能因此让整次连接失败**——见 `connect` 里的说明。
+        let light: (mode: UInt8, palette: [(r: UInt8, g: UInt8, b: UInt8)])?
+    }
+
+    /// 读灯效。读不到就当这台固件不支持，返回 nil，**不要往外抛**。
+    ///
+    /// issue #1：固件版本 0x00 的机器（已知能用的是 0x0B）握手正常、三层配置也全读到了，
+    /// 唯独不应答读调色板的 `FA B0`，于是整次连接跟着失败，用户连按键都改不了。
+    /// 灯效只是附带功能，不该有权否决主功能。
+    static func readLightIfSupported(_ session: DeviceSession)
+        -> (mode: UInt8, palette: [(r: UInt8, g: UInt8, b: UInt8)])? {
+        do {
+            return try session.readLight()
+        } catch {
+            EventLog.shared.log("会话", "读灯效失败，按该固件不支持处理：\(error)")
+            return nil
+        }
     }
 
     /// - Parameter preservingDraft: 为真时只刷新「已保存」基线，保留编辑区内容。
@@ -213,7 +234,7 @@ public final class DeviceModel: ObservableObject {
                     serial: session.serialNumber ?? "-",
                     firmware: hello.count > 3 ? String(hello[3]) : "?",
                     layers: try session.readAllLayers(),
-                    light: try session.readLight())
+                    light: Self.readLightIfSupported(session))
             } catch {
                 // 设备已经打开、但握手或首次读取失败：这个 session 不会有人接手，
                 // 必须就地关掉。这里已经在 worker 线程上，close() 的线程要求满足。
@@ -264,7 +285,7 @@ public final class DeviceModel: ObservableObject {
         guard let session, !busy else { return }
         busy = true
         errorMessage = nil
-        worker.run { (try session.readAllLayers(), try session.readLight()) } completion: { [weak self] result in
+        worker.run { (try session.readAllLayers(), Self.readLightIfSupported(session)) } completion: { [weak self] result in
             guard let self else { return }
             self.busy = false
             switch result {
@@ -292,12 +313,12 @@ public final class DeviceModel: ObservableObject {
         busy = true
         errorMessage = nil
 
-        worker.run { () -> ([UInt8: [Proto.Binding]], (UInt8, [(r: UInt8, g: UInt8, b: UInt8)])) in
+        worker.run { () -> ([UInt8: [Proto.Binding]], (mode: UInt8, palette: [(r: UInt8, g: UInt8, b: UInt8)])?) in
             for binding in pending {
                 try session.write(binding)
                 Thread.sleep(forTimeInterval: 0.03)
             }
-            return (try session.readAllLayers(), try session.readLight())
+            return (try session.readAllLayers(), Self.readLightIfSupported(session))
         } completion: { [weak self] result in
             guard let self else { return }
             self.busy = false
@@ -415,7 +436,16 @@ public final class DeviceModel: ObservableObject {
         draft = layers
     }
 
-    private func apply(light: (mode: UInt8, palette: [(r: UInt8, g: UInt8, b: UInt8)])) {
+    private func apply(light: (mode: UInt8, palette: [(r: UInt8, g: UInt8, b: UInt8)])?) {
+        guard let light else {
+            // 读不到就别猜。留着上一台设备的调色板会让界面显示一套根本不存在的灯效。
+            lightAvailable = false
+            lightMode = 0
+            rawPalette = []
+            palette = []
+            return
+        }
+        lightAvailable = true
         lightMode = light.mode
         rawPalette = light.palette
         palette = light.palette.map {

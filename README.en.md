@@ -6,7 +6,7 @@ A native macOS configuration tool for the ANTICATER desktop volume knob. Built o
 
 The original app ships as an x86_64-only Qt program and therefore depends on Rosetta 2 on Apple Silicon, which is being removed in macOS 28. This project provides a native arm64 implementation with an interface redesigned to follow macOS conventions.
 
-Version 1.2 · Requires macOS 13 or later · Noncommercial use only
+Version 1.2.2 · Requires macOS 13 or later · Noncommercial use only
 
 ---
 
@@ -24,7 +24,7 @@ All five physical knob actions can be configured: rotate left, rotate right, pre
 | Mouse | Mouse buttons, scroll wheel, four-direction swipe, like |
 | Procreate | The 31 presets from the corresponding page of the original app (see the note below) |
 
-Lighting-mode switching, a menu bar item and launch-at-login are also supported.
+Lighting-mode switching, a menu bar item and launch-at-login are also supported. Some firmware revisions do not answer the lighting commands; on those devices the lighting section is disabled with an explanation and key configuration is unaffected.
 
 Configuration is stored in the knob's own firmware. Once written, this app does not need to keep running, and the configuration follows the knob to another computer. This app only writes the configuration.
 
