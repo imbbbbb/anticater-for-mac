@@ -36,20 +36,30 @@ public struct MenuBarContent: View {
 
         Divider()
 
-        Menu("灯效") {
-            ForEach(Proto.lightModes, id: \.mode) { item in
-                Button {
-                    model.setLight(mode: item.mode)
-                } label: {
-                    if item.mode == model.lightMode {
-                        Label(item.name, systemImage: "checkmark")
-                    } else {
-                        Text(item.name)
+        if let rgb = model.rgbLight {
+            Toggle("灯光", isOn: Binding(
+                get: { rgb.isOn },
+                set: { on in
+                    var next = rgb
+                    next.isOn = on
+                    model.setRGBLight(next)
+                }))
+        } else {
+            Menu("灯效") {
+                ForEach(Proto.lightModes, id: \.mode) { item in
+                    Button {
+                        model.setLight(mode: item.mode)
+                    } label: {
+                        if item.mode == model.lightMode {
+                            Label(item.name, systemImage: "checkmark")
+                        } else {
+                            Text(item.name)
+                        }
                     }
                 }
             }
+            .disabled(!model.connection.isConnected || !model.lightAvailable)
         }
-        .disabled(!model.connection.isConnected || !model.lightAvailable)
 
         Button("打开主窗口") {
             NSApp.activate(ignoringOtherApps: true)

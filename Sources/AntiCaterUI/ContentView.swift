@@ -80,17 +80,21 @@ public struct ContentView: View {
                 }
 
                 Section("灯光") {
-                    Picker("灯效", selection: Binding(get: { model.lightMode },
-                                                    set: { model.setLight(mode: $0) })) {
-                        ForEach(Proto.lightModes, id: \.mode) { item in
-                            Text(item.name).tag(item.mode)
+                    if let rgb = model.rgbLight {
+                        RGBLightControls(model: model, light: rgb)
+                    } else {
+                        Picker("灯效", selection: Binding(get: { model.lightMode },
+                                                        set: { model.setLight(mode: $0) })) {
+                            ForEach(Proto.lightModes, id: \.mode) { item in
+                                Text(item.name).tag(item.mode)
+                            }
                         }
+                        .disabled(!model.connection.isConnected || !model.lightAvailable)
                     }
-                    .disabled(!model.connection.isConnected || !model.lightAvailable)
 
                     // 连上了却读不到灯效，说明这台固件不认这组命令。说一句，
                     // 否则用户只会看到一个点不动的选择器，不知道是坏了还是没连上。
-                    if model.connection.isConnected, !model.lightAvailable {
+                    if model.connection.isConnected, !model.lightAvailable, model.rgbLight == nil {
                         Text("这台旋钮的固件不支持灯效设置，按键配置不受影响。")
                             .font(.caption)
                             .foregroundStyle(.secondary)

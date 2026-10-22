@@ -7,7 +7,7 @@ enum Summary {
     static func short(_ binding: Proto.Binding) -> String {
         let names = compactNames(binding)
         guard !names.isEmpty else { return "未设置" }
-        if binding.type != .keyboard { return names[0] }
+        if binding.type?.isKeySequence != true { return names[0] }
         if let combo = Proto.combo(from: binding) {
             return (combo.modifierCodes + [combo.code])
                 .map { KeyNames.compactName(for: $0, type: .keyboard) }

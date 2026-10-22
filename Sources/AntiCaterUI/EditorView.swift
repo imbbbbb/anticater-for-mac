@@ -238,7 +238,8 @@ struct EditorView: View {
                 var next = combo
                 next[keyPath: path] = newValue
                 guard next.hasModifier else { return }
-                model.update(Proto.binding(index: binding.index, layer: binding.layer, combo: next))
+                model.update(Proto.binding(index: binding.index, layer: binding.layer, combo: next,
+                                           type: model.chordType))
                 browsing = nil
             })
     }
@@ -247,7 +248,7 @@ struct EditorView: View {
 
     @ViewBuilder
     private func macroSection(_ binding: Proto.Binding) -> some View {
-        let isKeyboard = binding.type == .keyboard
+        let isKeyboard = binding.type?.isKeySequence == true
         let count = isKeyboard ? Int(binding.dataLength) : 0
 
         Section {
@@ -345,11 +346,12 @@ struct EditorView: View {
 
     private func addStep(_ binding: Proto.Binding) {
         // 从别的类型切过来时，先清成一个干净的键盘配置
-        var next = binding.type == .keyboard
+        let isKeyboard = binding.type?.isKeySequence == true
+        var next = isKeyboard
             ? binding
             : Proto.Binding(index: binding.index, layer: binding.layer,
                             type: .keyboard, code: 0x04)
-        if binding.type != .keyboard {
+        if !isKeyboard {
             model.update(next)
             browsing = nil
             return
@@ -384,7 +386,8 @@ struct EditorView: View {
                 choiceRow(preset.name, detail: presetShortcut(preset),
                           selected: current == preset) {
                     model.update(Proto.binding(index: binding.index,
-                                               layer: binding.layer, preset: preset))
+                                               layer: binding.layer, preset: preset,
+                                               type: model.chordType))
                     // 这里**不能**清 browsing。预设写进去就是一段普通键盘序列，
                     // 推断出来是「单个按键」，一清就会把页面弹走。留在原地。
                     browsing = (slotID, .procreate)
@@ -409,7 +412,7 @@ struct EditorView: View {
             } label: {
                 Label("清空这个操作", systemImage: "eraser")
             }
-            .disabled(binding.type == .keyboard && binding.dataLength == 0)
+            .disabled(binding.type?.isKeySequence == true && binding.dataLength == 0)
         }
     }
 
@@ -441,7 +444,7 @@ struct EditorView: View {
     private func mousePicker(_ binding: Proto.Binding,
                              current: Proto.MouseAction?,
                              flag: UInt8) -> some View {
-        ForEach(Proto.mouseActions.filter { $0.flag == flag }) { action in
+        ForEach(model.mouseActions.filter { $0.flag == flag }) { action in
             choiceRow(action.name, selected: current == action) {
                 model.update(Proto.binding(index: binding.index, layer: binding.layer,
                                            mouse: action))

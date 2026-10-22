@@ -24,14 +24,21 @@ public enum Proto {
         case keyboard = 0x01
         case media    = 0x02
         case mouse    = 0x03
+        /// 杰理版原版软件的「Procreate」页写的是它，布局和键盘序列完全一样。
+        /// 老款没见过这个类型。
+        case combo    = 0x04
 
         public var label: String {
             switch self {
             case .keyboard: return "键盘"
             case .media:    return "多媒体"
             case .mouse:    return "鼠标"
+            case .combo:    return "组合"
             }
         }
+
+        /// 三元组里放的是键盘码序列、长度由 dataLength 决定的那两类。
+        public var isKeySequence: Bool { self == .keyboard || self == .combo }
     }
 
     /// 宏里的一步：先等 `delayMs` 毫秒，再发 `code`。
@@ -62,7 +69,7 @@ public enum Proto {
         /// 实际生效的步骤。键盘按 dataLength 截断，其余类型只有第一项有意义。
         public var activeSteps: [Step] {
             switch type {
-            case .keyboard: return Array(steps.prefix(Int(dataLength)))
+            case .keyboard, .combo: return Array(steps.prefix(Int(dataLength)))
             case .media, .mouse: return Array(steps.prefix(1))
             case nil: return steps.filter { !$0.isEmpty }
             }
@@ -139,7 +146,7 @@ public enum Proto {
 
     /// 判断一条键盘配置是不是「修饰前缀 + 单个目标键」的组合键形态
     public static func combo(from binding: Binding) -> Combo? {
-        guard binding.type == .keyboard else { return nil }
+        guard binding.type?.isKeySequence == true else { return nil }
         let steps = binding.activeSteps
         guard steps.count >= 2, steps.count <= 5,
               steps.allSatisfy({ $0.delayMs == 0 }) else { return nil }
@@ -227,18 +234,21 @@ public enum Proto {
         Preset("重做",               [Combo.shiftCode, Combo.winCode, 0x1D]), // ⇧⌘Z
     ]
 
-    public static func binding(index: UInt8, layer: UInt8, preset: Preset) -> Binding {
+    /// - Parameter type: 写成哪一类。老款只认键盘；杰理版原版软件写的是 `.combo`，
+    ///   见 `Jieli.chordType`。
+    public static func binding(index: UInt8, layer: UInt8, preset: Preset,
+                               type: ActionType = .keyboard) -> Binding {
         var steps = Array(repeating: Step(), count: macroSlots)
         for (i, code) in preset.codes.prefix(macroSlots).enumerated() {
             steps[i] = Step(delayMs: 0, code: code)
         }
-        return Binding(index: index, layer: layer, rawType: ActionType.keyboard.rawValue,
+        return Binding(index: index, layer: layer, rawType: type.rawValue,
                        flag: 0, dataLength: UInt8(preset.codes.count), steps: steps)
     }
 
     /// 反查：这个配置是不是恰好等于某条预设。
     public static func preset(from binding: Binding) -> Preset? {
-        guard binding.type == .keyboard else { return nil }
+        guard binding.type?.isKeySequence == true else { return nil }
         let codes = binding.steps.prefix(Int(binding.dataLength)).map(\.code)
         return procreatePresets.first { $0.codes == codes }
     }
@@ -278,11 +288,12 @@ public enum Proto {
                 steps: Array(repeating: Step(), count: macroSlots))
     }
 
-    public static func binding(index: UInt8, layer: UInt8, combo: Combo) -> Binding {
+    public static func binding(index: UInt8, layer: UInt8, combo: Combo,
+                               type: ActionType = .keyboard) -> Binding {
         let codes = combo.modifierCodes + [combo.code]
         var steps = Array(repeating: Step(), count: macroSlots)
         for (i, code) in codes.enumerated() { steps[i] = Step(delayMs: 0, code: code) }
-        return Binding(index: index, layer: layer, rawType: ActionType.keyboard.rawValue,
+        return Binding(index: index, layer: layer, rawType: type.rawValue,
                        flag: 0, dataLength: UInt8(codes.count), steps: steps)
     }
 
@@ -414,8 +425,12 @@ public enum Proto {
     }
 
     /// 把一个 Binding 编码成写入命令
-    public static func writeCommand(_ binding: Binding) -> [UInt8] {
-        var payload = [UInt8](repeating: 0, count: HIDTransport.payloadSize)
+    ///
+    /// - Parameter length: 载荷长度，取设备的 `HIDTransport.payloadLength`。
+    ///   最后一组三元组的补位字节在杰理版的 63 字节里放不下，按长度截掉。
+    public static func writeCommand(_ binding: Binding,
+                                    length: Int = HIDTransport.payloadSize) -> [UInt8] {
+        var payload = [UInt8](repeating: 0, count: max(length, triplesOffset + macroSlots * 3))
         payload[0] = Command.write.rawValue
         payload[1] = binding.index
         payload[2] = binding.layer
@@ -429,15 +444,21 @@ public enum Proto {
             payload[base + 1] = step.code
             payload[base + 2] = 0
         }
-        return payload
+        return Array(payload.prefix(length))
     }
 
     // MARK: - 应答解析
 
-    /// 解析一条 `FA` 读应答。载荷不含 Report ID。
-    public static func parseBinding(_ payload: [UInt8]) -> Binding? {
-        guard payload.count >= triplesOffset + macroSlots * 3,
-              payload[0] == Command.read.rawValue else { return nil }
+    /// 解析一条读应答。载荷不含 Report ID。
+    ///
+    /// - Parameter command: 应答的命令字节。老款回 `FA`；杰理版回的是 `FD`，
+    ///   布局和写命令一模一样。
+    public static func parseBinding(_ payload: [UInt8],
+                                    command: UInt8 = Command.read.rawValue) -> Binding? {
+        // 杰理版的载荷只有 63 字节，最后一组三元组的补位字节落在外面，
+        // 所以只要求到最后一个 code 为止。
+        guard payload.count >= triplesOffset + macroSlots * 3 - 1,
+              payload[0] == command else { return nil }
         var steps: [Step] = []
         steps.reserveCapacity(macroSlots)
         for i in 0..<macroSlots {

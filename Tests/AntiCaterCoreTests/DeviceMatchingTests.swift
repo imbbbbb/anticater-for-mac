@@ -75,4 +75,49 @@ final class DeviceMatchingTests: XCTestCase {
         let keyboardOnly = make(vid: supported.vid, pid: supported.pid, pairs: [(0x01, 0x06)])
         XCTAssertFalse(keyboardOnly.isConfigInterface, "没有 FF00:01 的接口不能当配置通道")
     }
+
+    /// 0x05AC:0x022C 被三样东西共用，只有杰理版的有线配置接口能被选中。
+    /// usage pairs 取自真机 ioreg（2026-10-21）。
+    func testSharedJieliIDOnlyMatchesWiredConfigInterface() {
+        func make(transport: String, pairs: [(page: Int, usage: Int)]) -> Diagnostics.DeviceInfo {
+            Diagnostics.DeviceInfo(vendorID: 0x05AC, productID: 0x022C, product: nil,
+                                   manufacturer: nil, transport: transport, serialNumber: nil,
+                                   primaryUsagePage: pairs.first?.page,
+                                   primaryUsage: pairs.first?.usage,
+                                   usagePairs: pairs)
+        }
+        let hidSet: [(page: Int, usage: Int)] = [(0x01, 0x06), (0x01, 0x02), (0x01, 0x01), (0x0C, 0x01)]
+
+        let wiredConfig = make(transport: "USB", pairs: [(0xFF00, 0x01)])
+        XCTAssertTrue(wiredConfig.isConfigInterface, "杰理版有线的 FF00:01 接口要被认出来")
+
+        let wiredKeyboard = make(transport: "USB", pairs: hidSet)
+        XCTAssertFalse(wiredKeyboard.isConfigInterface, "杰理版有线的键盘接口不是配置通道")
+
+        let dongle = make(transport: "USB", pairs: [(0xFF02, 0x02)])
+        XCTAssertFalse(dongle.isConfigInterface, "2.4G 接收器的厂商接口是 FF02:02，不能被选中")
+
+        let dongleKeyboard = make(transport: "USB", pairs: hidSet)
+        XCTAssertFalse(dongleKeyboard.isConfigInterface, "2.4G 接收器的键盘接口不能被选中")
+
+        let bluetooth = make(transport: "Bluetooth Low Energy", pairs: hidSet)
+        XCTAssertFalse(bluetooth.isConfigInterface, "蓝牙侧没有厂商页，不能被选中")
+    }
+
+    /// 选哪个会话实现只看 VID/PID。
+    func testVariantFollowsVIDPID() {
+        XCTAssertEqual(HIDTransport.variant(vid: 0x05AC, pid: 0x022C), .jieli)
+        for ids in HIDTransport.classicIDs {
+            XCTAssertEqual(HIDTransport.variant(vid: ids.vid, pid: ids.pid), .classic)
+        }
+    }
+
+    /// 载荷长度跟着设备报的 MaxOutputReportSize 走（含 Report ID 一字节），
+    /// 读不到或小得放不下一条按键配置时退回老款的 64。
+    func testPayloadLengthFollowsDevice() {
+        XCTAssertEqual(HIDTransport.payloadLength(maxOutputReportSize: 64), 63)   // 杰理版
+        XCTAssertEqual(HIDTransport.payloadLength(maxOutputReportSize: 65), 64)   // 老款
+        XCTAssertEqual(HIDTransport.payloadLength(maxOutputReportSize: nil), 64)
+        XCTAssertEqual(HIDTransport.payloadLength(maxOutputReportSize: 9), 64)
+    }
 }
