@@ -29,6 +29,21 @@ public final class DeviceModel: ObservableObject {
     /// 见 `readLightIfSupported`。
     @Published private(set) var lightAvailable = false
 
+    /// 杰理版的单色灯。老款、或者没读到时是 nil，界面据此决定显示哪套灯光控件。
+    @Published private(set) var rgbLight: Proto.RGBLight?
+    /// 灯光写入的合并：拖动取色器或亮度条时每秒能触发几十次，worker 上同一时刻
+    /// 只留一次写入在跑，其间的中间值只保留最后一个。
+    private var rgbWriteInFlight = false
+    private var rgbPending: Proto.RGBLight?
+    /// 最近一次确认写进设备的灯光，写失败时退回它。
+    private var rgbConfirmed: Proto.RGBLight?
+
+    /// 组合键和 Procreate 预设写成哪一类，跟着连上的设备走。
+    var chordType: Proto.ActionType { session?.chordType ?? .keyboard }
+
+    /// 鼠标页能选的动作，只列这台设备上验证过的。
+    var mouseActions: [Proto.MouseAction] { session?.mouseActions ?? Proto.mouseActions }
+
     /// USB / 蓝牙两条链路各自在不在线。插拔事件驱动，只读，不打开设备。
     @Published public private(set) var links = LinkStatus()
 
@@ -51,11 +66,11 @@ public final class DeviceModel: ObservableObject {
     /// 测试要看它在拔线/写失败之后有没有被丢掉，所以 setter 私有、getter 内部可见。
     private(set) var session: DeviceSession?
     private let linkMonitor: LinkMonitor?
-    /// 怎么建立一次连接。真机上是 `Session.connect()`，测试里换成假设备。
+    /// 怎么建立一次连接。真机上是 `DeviceConnector.connect()`，测试里换成假设备。
     private let makeSession: () throws -> DeviceSession
 
     public convenience init() {
-        self.init(worker: HIDWorker(), monitorLinks: true, makeSession: { try Session.connect() })
+        self.init(worker: HIDWorker(), monitorLinks: true, makeSession: { try DeviceConnector.connect() })
     }
 
     /// - Parameter monitorLinks: 关掉之后不注册 IOKit 插拔回调，测试里直接调
@@ -108,6 +123,9 @@ public final class DeviceModel: ObservableObject {
         connection = .disconnected
         // 灯效支持与否是「这台设备」的属性，换一台就不作数了。
         lightAvailable = false
+        rgbLight = nil
+        rgbConfirmed = nil
+        rgbPending = nil
         if let reason { message = reason }
     }
 
@@ -120,6 +138,7 @@ public final class DeviceModel: ObservableObject {
     var current: Proto.Binding? { binding(selected, in: layer) }
 
     func update(_ binding: Proto.Binding) {
+        let binding = session?.normalized(binding) ?? binding
         guard var list = draft[binding.layer],
               let i = list.firstIndex(where: { $0.index == binding.index }) else { return }
         list[i] = binding
@@ -184,7 +203,47 @@ public final class DeviceModel: ObservableObject {
         }
     }
 
+    /// 杰理版的灯光。改动立刻下发，和老款的灯效一样不进 draft。
+    ///
+    /// 界面先变，写入在后台排队；连续调用时只把最后一个值发出去。
+    func setRGBLight(_ light: Proto.RGBLight) {
+        guard session != nil, rgbLight != nil, light != rgbLight else { return }
+        rgbLight = light
+        errorMessage = nil
+        rgbPending = light
+        flushRGBLight()
+    }
+
+    private func flushRGBLight() {
+        guard !rgbWriteInFlight, let session, let next = rgbPending else { return }
+        rgbPending = nil
+        rgbWriteInFlight = true
+        worker.run {
+            try session.writeRGBLight(next)
+        } completion: { [weak self] result in
+            guard let self else { return }
+            self.rgbWriteInFlight = false
+            switch result {
+            case .success:
+                self.rgbConfirmed = next
+                self.flushRGBLight()
+            case .failure(let error):
+                // 排着的中间值也作废，界面退回最后一次确认写进去的状态。
+                self.rgbPending = nil
+                self.rgbLight = self.rgbConfirmed
+                self.dropSessionIfStale(error)
+                self.errorMessage = "调整灯光失败：" + Self.friendly(error, links: self.links)
+            }
+        }
+    }
+
     // MARK: - 连接与读取
+
+    /// 两代灯光一起读，各自读不到就是 nil。
+    struct Lights {
+        let classic: (mode: UInt8, palette: [(r: UInt8, g: UInt8, b: UInt8)])?
+        let rgb: Proto.RGBLight?
+    }
 
     struct Snapshot {
         let session: DeviceSession
@@ -193,7 +252,19 @@ public final class DeviceModel: ObservableObject {
         let firmware: String
         let layers: [UInt8: [Proto.Binding]]
         /// 读不到就是 nil。**不能因此让整次连接失败**——见 `connect` 里的说明。
-        let light: (mode: UInt8, palette: [(r: UInt8, g: UInt8, b: UInt8)])?
+        let lights: Lights
+    }
+
+    /// 两套灯光都问一遍，设备没有的那套自己会答「不支持」。
+    static func readLights(_ session: DeviceSession) -> Lights {
+        let rgb: Proto.RGBLight?
+        do {
+            rgb = try session.readRGBLight()
+        } catch {
+            EventLog.shared.log("会话", "读单色灯失败，按不支持处理：\(error)")
+            rgb = nil
+        }
+        return Lights(classic: readLightIfSupported(session), rgb: rgb)
     }
 
     /// 读灯效。读不到就当这台固件不支持，返回 nil，**不要往外抛**。
@@ -205,6 +276,8 @@ public final class DeviceModel: ObservableObject {
         -> (mode: UInt8, palette: [(r: UInt8, g: UInt8, b: UInt8)])? {
         do {
             return try session.readLight()
+        } catch DeviceSessionError.unsupported {
+            return nil
         } catch {
             EventLog.shared.log("会话", "读灯效失败，按该固件不支持处理：\(error)")
             return nil
@@ -234,7 +307,7 @@ public final class DeviceModel: ObservableObject {
                     serial: session.serialNumber ?? "-",
                     firmware: hello.count > 3 ? String(hello[3]) : "?",
                     layers: try session.readAllLayers(),
-                    light: Self.readLightIfSupported(session))
+                    lights: Self.readLights(session))
             } catch {
                 // 设备已经打开、但握手或首次读取失败：这个 session 不会有人接手，
                 // 必须就地关掉。这里已经在 worker 线程上，close() 的线程要求满足。
@@ -257,7 +330,7 @@ public final class DeviceModel: ObservableObject {
                     self.apply(layers: snapshot.layers)
                     self.message = "已读取旋钮上的全部设置"
                 }
-                self.apply(light: snapshot.light)
+                self.apply(lights: snapshot.lights)
             case .failure(let error):
                 // session 已经在 worker 里关掉了，这里只要把界面状态摆正。
                 self.session = nil
@@ -285,13 +358,13 @@ public final class DeviceModel: ObservableObject {
         guard let session, !busy else { return }
         busy = true
         errorMessage = nil
-        worker.run { (try session.readAllLayers(), Self.readLightIfSupported(session)) } completion: { [weak self] result in
+        worker.run { (try session.readAllLayers(), Self.readLights(session)) } completion: { [weak self] result in
             guard let self else { return }
             self.busy = false
             switch result {
-            case .success(let (layers, light)):
+            case .success(let (layers, lights)):
                 self.apply(layers: layers)
-                self.apply(light: light)
+                self.apply(lights: lights)
                 self.message = "已重新读取"
             case .failure(let error):
                 self.dropSessionIfStale(error)
@@ -313,18 +386,18 @@ public final class DeviceModel: ObservableObject {
         busy = true
         errorMessage = nil
 
-        worker.run { () -> ([UInt8: [Proto.Binding]], (mode: UInt8, palette: [(r: UInt8, g: UInt8, b: UInt8)])?) in
+        worker.run { () -> ([UInt8: [Proto.Binding]], Lights) in
             for binding in pending {
                 try session.write(binding)
                 Thread.sleep(forTimeInterval: 0.03)
             }
-            return (try session.readAllLayers(), Self.readLightIfSupported(session))
+            return (try session.readAllLayers(), Self.readLights(session))
         } completion: { [weak self] result in
             guard let self else { return }
             self.busy = false
             switch result {
-            case .success(let (layers, light)):
-                self.apply(light: light)
+            case .success(let (layers, lights)):
+                self.apply(lights: lights)
 
                 // 校验必须拿「本次打算写的内容」去和回读结果比。
                 // 这里曾经比的是 draft/saved，而回读会把这两者同时刷成设备值，
@@ -434,6 +507,14 @@ public final class DeviceModel: ObservableObject {
     private func apply(layers: [UInt8: [Proto.Binding]]) {
         saved = layers
         draft = layers
+    }
+
+    private func apply(lights: Lights) {
+        apply(light: lights.classic)
+        // 写入还在排队时不拿回读值覆盖：那是写之前的状态，会让滑块往回跳。
+        guard !rgbWriteInFlight, rgbPending == nil else { return }
+        rgbLight = lights.rgb
+        rgbConfirmed = lights.rgb
     }
 
     private func apply(light: (mode: UInt8, palette: [(r: UInt8, g: UInt8, b: UInt8)])?) {

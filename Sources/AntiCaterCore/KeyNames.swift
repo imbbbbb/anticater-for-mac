@@ -8,7 +8,7 @@ public enum KeyNames {
     public static func name(for code: UInt8, type: Proto.ActionType?) -> String {
         guard code != 0 else { return "—" }
         switch type {
-        case .keyboard: return keyboardName(code)
+        case .keyboard, .combo: return keyboardName(code)
         case .media:    return mediaName(code)
         case .mouse:    return String(format: "鼠标 0x%02X", code)
         case nil:       return String(format: "0x%02X", code)
@@ -51,11 +51,13 @@ public enum KeyNames {
         // 厂商自定义的组合键前缀码
         0xF1: "Ctrl+", 0xF2: "Shift+", 0xF3: "Alt+", 0xF4: "Win/⌘+",
         0xF5: "右 Ctrl+", 0xF6: "右 Shift+", 0xF7: "右 Alt+", 0xF8: "右 Win/⌘+",
+        // 杰理版原版键盘页上的 fn 键
+        0xF9: "fn",
     ]
 
     /// 窄处显示用的短名：小键盘只写字符本身（1 而不是「小键盘 1」），修饰键只留 Ctrl / Shift 之类。
     public static func compactName(for code: UInt8, type: Proto.ActionType?) -> String {
-        guard type == .keyboard else { return name(for: code, type: type) }
+        guard type?.isKeySequence == true else { return name(for: code, type: type) }
         switch code {
         case 0x59...0x61: return "\(code - 0x59 + 1)"
         case 0x62:        return "0"
@@ -81,6 +83,7 @@ public enum KeyNames {
         case 0xF6:        return "右Shift"
         case 0xF7:        return "右Alt"
         case 0xF8:        return "右⌘"
+        case 0xF9:        return "fn"
         default:          return keyboardName(code)
         }
     }
@@ -94,12 +97,15 @@ public enum KeyNames {
     private static let mediaTable: [UInt8: String] = [
         0xB5: "下一曲", 0xB6: "上一曲", 0xB7: "停止", 0xCD: "播放/暂停",
         0xE2: "静音", 0xE9: "音量+", 0xEA: "音量-",
+        // 杰理版出厂的长按左/右旋
+        0x6F: "屏幕亮度+", 0x70: "屏幕亮度-",
     ]
 
     /// 供界面选择用的常用动作清单
     public static let mediaChoices: [(code: UInt8, name: String)] = [
         (0xCD, "播放/暂停"), (0xB5, "下一曲"), (0xB6, "上一曲"),
         (0xE9, "音量+"), (0xEA, "音量-"), (0xE2, "静音"), (0xB7, "停止"),
+        (0x6F, "屏幕亮度+"), (0x70, "屏幕亮度-"),
     ]
 
     // MARK: - 界面用的键盘清单

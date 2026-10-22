@@ -18,6 +18,50 @@ public protocol DeviceSession: AnyObject {
     /// 释放设备。必须在提交这次会话的那个 worker 线程上调用，原因见
     /// `HIDTransport.close()`。
     func close()
+
+    // 下面几项是两代硬件不同的地方，都有默认实现（即老款的行为），
+    // 老款的 `Session` 和测试里的假设备不用管它们。
+
+    /// 单色灯（杰理版）。没有这套灯光的设备返回 nil。
+    func readRGBLight() throws -> Proto.RGBLight?
+    func writeRGBLight(_ light: Proto.RGBLight) throws
+
+    /// 组合键、Procreate 预设写成哪一类。
+    var chordType: Proto.ActionType { get }
+
+    /// 编辑区里的一条配置按这台设备的写法规整。回读校验拿「打算写的」和
+    /// 「读回来的」逐项比，所以凡是设备会改写的字段都要在进 draft 之前规整好。
+    func normalized(_ binding: Proto.Binding) -> Proto.Binding
+
+    /// 鼠标页给用户选的动作。只列在这台设备上验证过的。
+    var mouseActions: [Proto.MouseAction] { get }
+}
+
+public extension DeviceSession {
+    func readRGBLight() throws -> Proto.RGBLight? { nil }
+    func writeRGBLight(_ light: Proto.RGBLight) throws { throw DeviceSessionError.unsupported }
+    var chordType: Proto.ActionType { .keyboard }
+    func normalized(_ binding: Proto.Binding) -> Proto.Binding { binding }
+    var mouseActions: [Proto.MouseAction] { Proto.mouseActions }
+}
+
+public enum DeviceSessionError: Error, CustomStringConvertible {
+    /// 这台设备没有这项功能。调用方按「不支持」处理，不当成故障。
+    case unsupported
+
+    public var description: String { "这台设备不支持该功能" }
+}
+
+/// 找到设备，按 VID/PID 选对应的会话实现。
+public enum DeviceConnector {
+    public static func connect() throws -> DeviceSession {
+        guard let transport = HIDTransport.discover() else { throw HIDTransport.Failure.notFound }
+        try transport.open()
+        switch transport.variant {
+        case .classic: return Session(transport: transport)
+        case .jieli:   return JieliSession(transport: transport)
+        }
+    }
 }
 
 /// 在 HIDTransport 之上提供成套的读写动作。
@@ -29,8 +73,10 @@ public final class Session: DeviceSession {
         self.transport = transport
     }
 
+    /// 只连老款。不确定插的是哪一代时用 `DeviceConnector.connect()`。
     public static func connect() throws -> Session {
-        guard let transport = HIDTransport.discover() else { throw HIDTransport.Failure.notFound }
+        guard let transport = HIDTransport.discover(), transport.variant == .classic
+        else { throw HIDTransport.Failure.notFound }
         try transport.open()
         return Session(transport: transport)
     }
@@ -60,7 +106,7 @@ public final class Session: DeviceSession {
         transport.flushPendingInput()
         try transport.send(Proto.readLayerCommand(layer: layer))
         let replies = try transport.receive(count: Proto.entryCount)
-        return replies.compactMap(Proto.parseBinding)
+        return replies.compactMap { Proto.parseBinding($0) }
     }
 
     public func readAllLayers() throws -> [UInt8: [Proto.Binding]] {
@@ -96,7 +142,7 @@ public final class Session: DeviceSession {
             "第 \(binding.layer) 层 [\(String(format: "%02d", Int(binding.index)))] "
             + "类型 \(binding.type?.label ?? String(format: "0x%02X", binding.rawType)) "
             + "len=\(binding.dataLength)")
-        try transport.send(Proto.writeCommand(binding))
+        try transport.send(Proto.writeCommand(binding, length: transport.payloadLength))
         try transport.send(Proto.commitCommand())
     }
 }

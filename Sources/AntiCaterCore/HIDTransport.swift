@@ -3,21 +3,45 @@ import IOKit.hid
 
 /// 与 ANTICATER 键盘的厂商自定义配置接口通信。
 ///
-/// 该接口位于 UsagePage 0xFF00 / Usage 0x01，收发均为 Report ID 3 加 64 字节定长载荷。
+/// 该接口位于 UsagePage 0xFF00 / Usage 0x01，收发均为 Report ID 3 加定长载荷。
+/// 载荷长度跟着设备走：老款 64 字节，杰理版 63 字节（报告描述符 Report Count 0x3F）。
 /// 因为不是键盘/消费者页，打开它不需要「输入监控」授权（已实测确认）。
 public final class HIDTransport {
 
     public static let configUsagePage = 0xFF00
     public static let configUsage = 0x01
     public static let reportID: UInt8 = 3
-    /// 载荷长度，不含 Report ID
+    /// 老款的载荷长度，不含 Report ID。设备没报 MaxOutputReportSize 时也用它。
+    /// 具体某台设备的长度看实例上的 `payloadLength`。
     public static let payloadSize = 64
 
-    /// app 支持的全部 VID/PID 组合，取自原版程序启动时的枚举顺序
-    public static let supportedIDs: [(vid: Int, pid: Int)] = {
+    /// 同一款旋钮的两代硬件，配置协议不同，由 `DeviceConnector` 据此选会话实现。
+    ///
+    /// - `classic`：VID 0x1189 / 0x514C 那一代，见 `Session`。
+    /// - `jieli`：换成杰理芯片的新版，借用了苹果的 VID 0x05AC，见 `JieliSession`。
+    public enum Variant: Equatable {
+        case classic
+        case jieli
+    }
+
+    /// 老一代的 VID/PID 组合，取自原版程序启动时的枚举顺序
+    public static let classicIDs: [(vid: Int, pid: Int)] = {
         let pids = [0x8842, 0x8840, 0x8830, 0x8831, 0x8832, 0x8833, 0x8850, 0x8851]
         return [0x1189, 0x514C].flatMap { vid in pids.map { (vid, $0) } }
     }()
+
+    /// 杰理版。这一对 ID 同时被三样东西用着：杰理版的有线接口（FF00:01）、
+    /// 它的 2.4G 接收器（厂商接口是 FF02:02）、老款的蓝牙侧（没有厂商页）。
+    /// 只有第一个是配置通道，靠 `hasConfigUsage` 区分——接收器和有线旋钮
+    /// 同时插着时原版软件就连到了接收器上。
+    public static let jieliIDs: [(vid: Int, pid: Int)] = [(0x05AC, 0x022C)]
+
+    /// app 支持的全部 VID/PID 组合
+    public static let supportedIDs: [(vid: Int, pid: Int)] = classicIDs + jieliIDs
+
+    public static func variant(vid: Int, pid: Int) -> Variant {
+        jieliIDs.contains { $0.vid == vid && $0.pid == pid } ? .jieli : .classic
+    }
 
     public enum Failure: Error, CustomStringConvertible {
         case notFound
@@ -57,12 +81,14 @@ public final class HIDTransport {
     public let vendorID: Int
     public let productID: Int
     public let serialNumber: String?
+    public var variant: Variant { Self.variant(vid: vendorID, pid: productID) }
+    /// 这台设备一条报文的载荷长度，不含 Report ID。
+    public let payloadLength: Int
 
     private let device: IOHIDDevice
     private var opened = false
     private var inbox: [[UInt8]] = []
-    private var inputBuffer: UnsafeMutablePointer<UInt8>? =
-        .allocate(capacity: payloadSize + 1)
+    private var inputBuffer: UnsafeMutablePointer<UInt8>?
 
     /// `open()` 时所在线程的 run loop。注销回调必须回到同一个 run loop，
     /// 不能用 deinit 当时的 `CFRunLoopGetCurrent()` —— 见 `close()` 的说明。
@@ -134,7 +160,8 @@ public final class HIDTransport {
             guard let vid = intProperty(device, kIOHIDVendorIDKey),
                   let pid = intProperty(device, kIOHIDProductIDKey) else { continue }
             guard hasConfigUsage(device) else { rejected += 1; continue }
-            EventLog.shared.log("发现", String(format: "选中配置接口 0x%04X:0x%04X", vid, pid))
+            EventLog.shared.log("发现", String(format: "选中配置接口 0x%04X:0x%04X（%@）", vid, pid,
+                                               variant(vid: vid, pid: pid) == .jieli ? "杰理版" : "老款"))
             return HIDTransport(device: device, vid: vid, pid: pid)
         }
         EventLog.shared.log("发现",
@@ -148,6 +175,18 @@ public final class HIDTransport {
         self.vendorID = vid
         self.productID = pid
         self.serialNumber = IOHIDDeviceGetProperty(device, kIOHIDSerialNumberKey as CFString) as? String
+        self.payloadLength = Self.payloadLength(
+            maxOutputReportSize: Self.intProperty(device, kIOHIDMaxOutputReportSizeKey))
+        self.inputBuffer = .allocate(capacity: payloadLength + 1)
+        EventLog.shared.log("发现", "报文载荷 \(payloadLength) 字节")
+    }
+
+    /// IOKit 报的 MaxOutputReportSize 含 Report ID 那一字节。
+    /// 读不到、或者小得不合理时退回老款的 64——载荷至少要放得下一整条按键配置。
+    static func payloadLength(maxOutputReportSize: Int?) -> Int {
+        guard let size = maxOutputReportSize,
+              size - 1 >= Proto.triplesOffset + Proto.macroSlots * 3 - 1 else { return payloadSize }
+        return size - 1
     }
 
     /// 关闭设备并注销输入回调。**必须在当初调用 `open()` 的那个线程上调用。**
@@ -166,7 +205,7 @@ public final class HIDTransport {
 
         // 传 nil 回调即注销。必须赶在缓冲区释放之前，否则 IOKit 可能往已释放的内存写。
         if let buffer = inputBuffer {
-            IOHIDDeviceRegisterInputReportCallback(device, buffer, Self.payloadSize + 1, nil, nil)
+            IOHIDDeviceRegisterInputReportCallback(device, buffer, payloadLength + 1, nil, nil)
         }
         IOHIDDeviceUnscheduleFromRunLoop(device,
                                          scheduledRunLoop ?? CFRunLoopGetCurrent(),
@@ -182,7 +221,7 @@ public final class HIDTransport {
         // 正常路径下 `close()` 已经调过了，这里只剩释放缓冲区。
         // 走到 else 分支说明有调用方漏了 close()，属于编程错误：此时既不能安全地
         // 注销回调（不在正确的线程上），也不能释放缓冲区（回调可能还会往里写），
-        // 只好把这 65 字节泄漏掉换取内存安全，并留下记录。
+        // 只好把这一条报文大小的缓冲区泄漏掉换取内存安全，并留下记录。
         if opened {
             assertionFailure("HIDTransport 被释放时仍处于打开状态，close() 漏调了")
             FileHandle.standardError.write(
@@ -210,7 +249,7 @@ public final class HIDTransport {
 
         let context = Unmanaged.passUnretained(self).toOpaque()
         IOHIDDeviceRegisterInputReportCallback(
-            device, inputBuffer, Self.payloadSize + 1,
+            device, inputBuffer, payloadLength + 1,
             { context, _, _, _, _, report, length in
                 guard let context, length > 0 else { return }
                 let transport = Unmanaged<HIDTransport>.fromOpaque(context).takeUnretainedValue()
@@ -229,17 +268,17 @@ public final class HIDTransport {
         IOHIDDeviceScheduleWithRunLoop(device, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
     }
 
-    /// 发送一条命令。`payload` 不含 Report ID，不足 64 字节的部分补零。
+    /// 发送一条命令。`payload` 不含 Report ID，不足 `payloadLength` 的部分补零。
     ///
     /// 注意：原版程序发送时会把未用字节留成栈垃圾，设备显然不看它们；这里一律补零，
     /// 既更干净，也和抓到的写入命令（全零）一致。
     public func send(_ payload: [UInt8]) throws {
-        precondition(payload.count <= Self.payloadSize, "载荷超过 64 字节")
+        precondition(payload.count <= payloadLength, "载荷超过 \(payloadLength) 字节")
         // 这台设备要求缓冲区首字节就是 Report ID —— IOHIDDeviceSetReport 的 reportID 参数
-        // 之外还得带上它，缓冲区总长 65。hidapi 在 macOS 上也是这么做的（仅当 ID 为 0 时才剥掉）。
+        // 之外还得带上它，缓冲区总长 = 载荷 + 1。hidapi 在 macOS 上也是这么做的（仅当 ID 为 0 时才剥掉）。
         var buffer: [UInt8] = [Self.reportID]
         buffer.append(contentsOf: payload)
-        buffer.append(contentsOf: repeatElement(0, count: Self.payloadSize - payload.count))
+        buffer.append(contentsOf: repeatElement(0, count: payloadLength - payload.count))
         let rc = IOHIDDeviceSetReport(device, kIOHIDReportTypeOutput, CFIndex(Self.reportID),
                                       buffer, buffer.count)
         guard rc == kIOReturnSuccess else {
