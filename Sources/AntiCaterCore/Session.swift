@@ -73,14 +73,6 @@ public final class Session: DeviceSession {
         self.transport = transport
     }
 
-    /// 只连老款。不确定插的是哪一代时用 `DeviceConnector.connect()`。
-    public static func connect() throws -> Session {
-        guard let transport = HIDTransport.discover(), transport.variant == .classic
-        else { throw HIDTransport.Failure.notFound }
-        try transport.open()
-        return Session(transport: transport)
-    }
-
     public var deviceName: String {
         String(format: "0x%04X:0x%04X", transport.vendorID, transport.productID)
     }
@@ -142,7 +134,7 @@ public final class Session: DeviceSession {
             "第 \(binding.layer) 层 [\(String(format: "%02d", Int(binding.index)))] "
             + "类型 \(binding.type?.label ?? String(format: "0x%02X", binding.rawType)) "
             + "len=\(binding.dataLength)")
-        try transport.send(Proto.writeCommand(binding, length: transport.payloadLength))
+        try transport.send(Proto.writeCommand(binding))
         try transport.send(Proto.commitCommand())
     }
 }

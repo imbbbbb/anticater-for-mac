@@ -11,7 +11,11 @@ import AntiCaterCore
 // 抓包收尾工具：把被当成实验田的那个键改回原来的功能，写完立刻回读校验。
 // 只动指定的那一个键，其它一概不碰。
 
-let session = try Session.connect()
+// 只认老款：下面按老款的层和键号写。
+guard let session = try DeviceConnector.connect() as? Session else {
+    FileHandle.standardError.write("插着的不是老款旋钮，这个工具只适用于老款。\n".data(using: .utf8)!)
+    exit(1)
+}
 try session.handshake()
 
 func restore(_ key: PhysicalKey, to binding: Proto.Binding) throws {

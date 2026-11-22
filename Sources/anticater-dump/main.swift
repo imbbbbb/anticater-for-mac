@@ -65,6 +65,8 @@ do {
     if let rgb = try session.readRGBLight() {
         print(String(format: "%@  颜色 #%02X%02X%02X  亮度 %d%%",
                      rgb.isOn ? "开" : "关", rgb.red, rgb.green, rgb.blue, Int(rgb.brightness)))
+    } else if session is JieliSession {
+        print("没有读到灯光")
     } else {
         let light = try session.readLight()
         let palette = light.palette

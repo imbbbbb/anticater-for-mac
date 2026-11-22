@@ -62,7 +62,7 @@ public final class JieliSession: DeviceSession {
             "[\(String(format: "%02d", Int(binding.index)))] "
             + "类型 \(binding.type?.label ?? String(format: "0x%02X", binding.rawType)) "
             + "len=\(binding.dataLength)")
-        for command in Proto.Jieli.writeCommands(binding, length: transport.payloadLength) {
+        for command in Proto.Jieli.writeCommands(binding) {
             try transport.send(command)
             // 原版两条之间隔约 2 ms；这里给 3 ms，多一点不碍事。
             Thread.sleep(forTimeInterval: 0.003)

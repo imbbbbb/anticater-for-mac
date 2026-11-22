@@ -12,6 +12,8 @@ public enum Proto {
     public static let layerCount = 3           // 层 1..3
     public static let macroSlots = 18          // 原版「延时」页正好排 18 格；载荷放得下 19 组
     public static let triplesOffset = 7        // 三元组起始下标
+    /// 一条按键配置占的字节数（61）。两代设备的载荷（64 / 63）都放得下，余下的由 `send()` 补零。
+    public static let bindingLength = triplesOffset + macroSlots * 3
 
     public enum Command: UInt8 {
         case handshake = 0xFB
@@ -424,13 +426,9 @@ public enum Proto {
         [Command.write.rawValue, 0xFE, 0xFF]
     }
 
-    /// 把一个 Binding 编码成写入命令
-    ///
-    /// - Parameter length: 载荷长度，取设备的 `HIDTransport.payloadLength`。
-    ///   最后一组三元组的补位字节在杰理版的 63 字节里放不下，按长度截掉。
-    public static func writeCommand(_ binding: Binding,
-                                    length: Int = HIDTransport.payloadSize) -> [UInt8] {
-        var payload = [UInt8](repeating: 0, count: max(length, triplesOffset + macroSlots * 3))
+    /// 把一个 Binding 编码成写入命令，长 `bindingLength`。
+    public static func writeCommand(_ binding: Binding) -> [UInt8] {
+        var payload = [UInt8](repeating: 0, count: bindingLength)
         payload[0] = Command.write.rawValue
         payload[1] = binding.index
         payload[2] = binding.layer
@@ -444,7 +442,7 @@ public enum Proto {
             payload[base + 1] = step.code
             payload[base + 2] = 0
         }
-        return Array(payload.prefix(length))
+        return payload
     }
 
     // MARK: - 应答解析
@@ -455,9 +453,7 @@ public enum Proto {
     ///   布局和写命令一模一样。
     public static func parseBinding(_ payload: [UInt8],
                                     command: UInt8 = Command.read.rawValue) -> Binding? {
-        // 杰理版的载荷只有 63 字节，最后一组三元组的补位字节落在外面，
-        // 所以只要求到最后一个 code 为止。
-        guard payload.count >= triplesOffset + macroSlots * 3 - 1,
+        guard payload.count >= bindingLength,
               payload[0] == command else { return nil }
         var steps: [Step] = []
         steps.reserveCapacity(macroSlots)

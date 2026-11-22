@@ -6,7 +6,7 @@ A native macOS configuration tool for the ANTICATER desktop volume knob. Built o
 
 The original app ships as an x86_64-only Qt program and therefore depends on Rosetta 2 on Apple Silicon, which is being removed in macOS 28. This project provides a native arm64 implementation with an interface redesigned to follow macOS conventions.
 
-Version 1.2.2 · Requires macOS 13 or later · Noncommercial use only
+Version 1.3 · Requires macOS 13 or later · Noncommercial use only
 
 ---
 
@@ -25,6 +25,11 @@ All five physical knob actions can be configured: rotate left, rotate right, pre
 | Procreate | The 31 presets from the corresponding page of the original app (see the note below) |
 
 Lighting-mode switching, a menu bar item and launch-at-login are also supported. Some firmware revisions do not answer the lighting commands; on those devices the lighting section is disabled with an explanation and key configuration is unaffected.
+
+Two hardware generations are supported and detected automatically when plugged in:
+
+- **Original** (VID `0x514C` etc.): three layers, six lighting modes with a palette.
+- **Jieli-chip version** (VID `0x05AC` / PID `0x022C`): one layer, single-colour light (on/off, colour, brightness). The mouse page only offers "left button", the only action verified on this hardware. Support for this model was contributed by the community ([#3](../../pull/3)); the author does not own one.
 
 Configuration is stored in the knob's own firmware. Once written, this app does not need to keep running, and the configuration follows the knob to another computer. This app only writes the configuration.
 
@@ -124,7 +129,10 @@ The UI is a separate library target (`AntiCaterUI`) rather than living directly 
 
 ## Protocol notes
 
-The device protocol is undocumented; this implementation is based on observing the traffic of the author's own device. The configuration interface is VID `0x514C` / PID `0x8850`, HID usage page `0xFF00` usage `0x01`, Report ID 3, with fixed 64-byte payloads in both directions.
+The device protocol is undocumented; this implementation is based on observing the traffic of the author's own device. The configuration interface is HID usage page `0xFF00` usage `0x01`, Report ID 3; the payload length follows the device's reported `MaxOutputReportSize`:
+
+- Original: VID `0x514C` / PID `0x8850` etc., 64-byte payloads. See `Protocol.swift`.
+- Jieli-chip version: VID `0x05AC` / PID `0x022C`, 63-byte payloads. Key bindings use the same layout as the original; the differences in reading, writing and lighting are in `ProtocolJieli.swift`. The same VID/PID pair is also used by the original's Bluetooth side and by the Jieli version's 2.4G receiver (usage `0xFF02:0x02`), so only `0xFF00:0x01` is accepted.
 
 Some of the numbering is inferred rather than verified. The source comments annotate the provenance of each item; two of them warrant mention here:
 

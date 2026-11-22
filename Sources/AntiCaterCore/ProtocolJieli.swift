@@ -55,10 +55,10 @@ extension Proto {
         }
 
         /// 一个键的写入：两条报文，依次发出。
-        public static func writeCommands(_ binding: Binding, length: Int) -> [[UInt8]] {
+        public static func writeCommands(_ binding: Binding) -> [[UInt8]] {
             var normalized = binding
             normalized.layer = layer
-            let first = writeCommand(normalized, length: length)
+            let first = writeCommand(normalized)
             guard let mirror = mirrorIndex[binding.index] else { return [first] }
             var second = first
             second[1] = mirror

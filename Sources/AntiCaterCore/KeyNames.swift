@@ -26,6 +26,8 @@ public enum KeyNames {
             return String(UnicodeScalar(UInt8(0x31 + code - 0x1E)))
         case 0x3A...0x45:  // F1-F12
             return "F\(code - 0x3A + 1)"
+        case 0x68...0x73:  // F13-F24
+            return "F\(code - 0x68 + 13)"
         case 0x59...0x61:  // 小键盘 1-9
             return "小键盘 \(code - 0x59 + 1)"
         default:
@@ -134,7 +136,7 @@ public enum KeyNames {
     public static let keyboardGroups: [Group] = [
         Group(title: "字母", items: range(0x04...0x1D)),
         Group(title: "数字", items: list(Array(0x1E...0x26) + [0x27])),
-        Group(title: "功能键", items: range(0x3A...0x45)),
+        Group(title: "功能键", items: range(0x3A...0x45) + range(0x68...0x73)),
         Group(title: "控制", items: list([0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x39,
                                           0x46, 0x47, 0x48, 0x65])),
         Group(title: "符号", items: list([0x2D, 0x2E, 0x2F, 0x30, 0x31, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x64])),

@@ -11,10 +11,6 @@ public final class HIDTransport {
     public static let configUsagePage = 0xFF00
     public static let configUsage = 0x01
     public static let reportID: UInt8 = 3
-    /// 老款的载荷长度，不含 Report ID。设备没报 MaxOutputReportSize 时也用它。
-    /// 具体某台设备的长度看实例上的 `payloadLength`。
-    public static let payloadSize = 64
-
     /// 同一款旋钮的两代硬件，配置协议不同，由 `DeviceConnector` 据此选会话实现。
     ///
     /// - `classic`：VID 0x1189 / 0x514C 那一代，见 `Session`。
@@ -160,9 +156,16 @@ public final class HIDTransport {
             guard let vid = intProperty(device, kIOHIDVendorIDKey),
                   let pid = intProperty(device, kIOHIDProductIDKey) else { continue }
             guard hasConfigUsage(device) else { rejected += 1; continue }
-            EventLog.shared.log("发现", String(format: "选中配置接口 0x%04X:0x%04X（%@）", vid, pid,
-                                               variant(vid: vid, pid: pid) == .jieli ? "杰理版" : "老款"))
-            return HIDTransport(device: device, vid: vid, pid: pid)
+            let maxOutput = intProperty(device, kIOHIDMaxOutputReportSizeKey)
+            guard let length = payloadLength(maxOutputReportSize: maxOutput) else {
+                EventLog.shared.log("发现", String(format: "配置接口 0x%04X:0x%04X 的 MaxOutputReportSize=%@，"
+                    + "放不下一条按键配置，跳过", vid, pid, maxOutput.map(String.init) ?? "读不到"))
+                rejected += 1
+                continue
+            }
+            EventLog.shared.log("发现", String(format: "选中配置接口 0x%04X:0x%04X（%@），载荷 %d 字节",
+                vid, pid, variant(vid: vid, pid: pid) == .jieli ? "杰理版" : "老款", length))
+            return HIDTransport(device: device, vid: vid, pid: pid, payloadLength: length)
         }
         EventLog.shared.log("发现",
             "没有找到配置接口（VID/PID 命中但无 FF00:01 的接口 \(rejected) 个，"
@@ -170,22 +173,19 @@ public final class HIDTransport {
         return nil
     }
 
-    private init(device: IOHIDDevice, vid: Int, pid: Int) {
+    private init(device: IOHIDDevice, vid: Int, pid: Int, payloadLength: Int) {
         self.device = device
         self.vendorID = vid
         self.productID = pid
         self.serialNumber = IOHIDDeviceGetProperty(device, kIOHIDSerialNumberKey as CFString) as? String
-        self.payloadLength = Self.payloadLength(
-            maxOutputReportSize: Self.intProperty(device, kIOHIDMaxOutputReportSizeKey))
+        self.payloadLength = payloadLength
         self.inputBuffer = .allocate(capacity: payloadLength + 1)
-        EventLog.shared.log("发现", "报文载荷 \(payloadLength) 字节")
     }
 
     /// IOKit 报的 MaxOutputReportSize 含 Report ID 那一字节。
-    /// 读不到、或者小得不合理时退回老款的 64——载荷至少要放得下一整条按键配置。
-    static func payloadLength(maxOutputReportSize: Int?) -> Int {
-        guard let size = maxOutputReportSize,
-              size - 1 >= Proto.triplesOffset + Proto.macroSlots * 3 - 1 else { return payloadSize }
+    /// 读不到、或者放不下一条按键配置时返回 nil，这个接口不能用。
+    static func payloadLength(maxOutputReportSize: Int?) -> Int? {
+        guard let size = maxOutputReportSize, size - 1 >= Proto.bindingLength else { return nil }
         return size - 1
     }
 

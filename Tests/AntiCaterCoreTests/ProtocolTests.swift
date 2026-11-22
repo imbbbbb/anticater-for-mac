@@ -61,14 +61,21 @@ final class ProtocolTests: XCTestCase {
 
     // MARK: - 报文布局
 
-    /// 18 组三元组必须塞得进 64 字节载荷。改 macroSlots 时这条会拦住越界。
+    /// 18 组三元组必须塞得进最短的载荷（杰理版 63 字节）。改 macroSlots 时这条会拦住越界。
     func testPayloadFits() {
-        XCTAssertLessThanOrEqual(Proto.triplesOffset + Proto.macroSlots * 3,
-                                 HIDTransport.payloadSize)
+        XCTAssertLessThanOrEqual(Proto.bindingLength, 63)
         let cmd = Proto.writeCommand(Proto.Binding(index: 2, layer: 1,
                                                    type: .keyboard, code: 0x06))
-        XCTAssertEqual(cmd.count, HIDTransport.payloadSize)
+        XCTAssertEqual(cmd.count, Proto.bindingLength)
         XCTAssertEqual(cmd[0], Proto.Command.write.rawValue)
+    }
+
+    /// 功能键分组含 F1–F12（0x3A–0x45）和 F13–F24（0x68–0x73）。
+    func testFunctionKeysGoUpToF24() {
+        let names = KeyNames.keyboardGroups.first { $0.title == "功能键" }?.items.map(\.name)
+        XCTAssertEqual(names, (1...24).map { "F\($0)" })
+        XCTAssertEqual(KeyNames.keyboardName(0x68), "F13")
+        XCTAssertEqual(KeyNames.keyboardName(0x73), "F24")
     }
 
     /// 写出去的字节再读回来必须是同一个配置。
@@ -88,7 +95,7 @@ final class ProtocolTests: XCTestCase {
     /// M1：`dataLength` 是设备给的，界面拿它当下标上界。
     /// 设备抽风（或线上有噪声）返回 200，不夹紧就会越界崩溃。
     func testDataLengthIsClamped() {
-        var payload = [UInt8](repeating: 0, count: HIDTransport.payloadSize)
+        var payload = [UInt8](repeating: 0, count: 64)
         payload[0] = Proto.Command.read.rawValue
         payload[5] = 200
         guard let parsed = Proto.parseBinding(payload) else { return XCTFail("解析失败") }

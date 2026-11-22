@@ -113,11 +113,11 @@ final class DeviceMatchingTests: XCTestCase {
     }
 
     /// 载荷长度跟着设备报的 MaxOutputReportSize 走（含 Report ID 一字节），
-    /// 读不到或小得放不下一条按键配置时退回老款的 64。
+    /// 读不到或小得放不下一条按键配置时这个接口不能用。
     func testPayloadLengthFollowsDevice() {
         XCTAssertEqual(HIDTransport.payloadLength(maxOutputReportSize: 64), 63)   // 杰理版
-        XCTAssertEqual(HIDTransport.payloadLength(maxOutputReportSize: 65), 64)   // 老款
-        XCTAssertEqual(HIDTransport.payloadLength(maxOutputReportSize: nil), 64)
-        XCTAssertEqual(HIDTransport.payloadLength(maxOutputReportSize: 9), 64)
+        XCTAssertEqual(HIDTransport.payloadLength(maxOutputReportSize: 65), 64)   // 老款（2026-11-22 真机实测 65）
+        XCTAssertNil(HIDTransport.payloadLength(maxOutputReportSize: nil))
+        XCTAssertNil(HIDTransport.payloadLength(maxOutputReportSize: 9))
     }
 }
