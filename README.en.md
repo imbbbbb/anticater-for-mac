@@ -6,7 +6,7 @@ A native macOS configuration tool for the ANTICATER desktop volume knob. Built o
 
 The original app ships as an x86_64-only Qt program and therefore depends on Rosetta 2 on Apple Silicon, which is being removed in macOS 28. This project provides a native arm64 implementation with an interface redesigned to follow macOS conventions.
 
-Version 1.3 · Requires macOS 13 or later · Noncommercial use only
+Version 1.4 · Requires macOS 13 or later · Noncommercial use only
 
 ---
 

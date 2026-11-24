@@ -6,7 +6,7 @@ ANTICATER 桌面音量旋钮配置工具的 macOS 原生版本。在原版 app �
 
 原版为 x86_64 单架构 Qt 程序，在 Apple Silicon 设备上需经 Rosetta 2 运行，而 Rosetta 2 将于 macOS 28 移除。本项目提供原生 arm64 实现，并按 macOS 平台惯例重新设计了界面。
 
-版本 1.3 · 要求 macOS 13 或更高版本 · 仅供非商业使用
+版本 1.4 · 要求 macOS 13 或更高版本 · 仅供非商业使用
 
 ---
 
