@@ -1,131 +1,182 @@
 import SwiftUI
 import AntiCaterCore
 
-/// 旋钮实物示意图，五个操作区都可以直接点。
+/// 旋钮舞台：白色底座 + 红色旋钮居中，四个旋转操作以药丸排在底座上下两侧，按压 = 旋钮本体。
 ///
-/// 布局照着实物来：方形底座 + 居中的滚花旋钮，四角是四种旋转操作。
-/// 中心圆 = 按压，上排两个 = 单纯左右旋，下排两个 = 长按着旋。
+/// 每次点某个操作，旋钮把这个手势演示一遍，然后回到 12 点：
+/// 左/右旋 = 转 ∓15°；按压 = 按下回弹；长按左/右旋 = 先按下、按住再转 ∓30°。
+/// 转完停 2 秒再回正——不累加角度，免得指示点停在随机位置，被当成硬件状态。
 struct KnobControl: View {
     @Binding var selection: PhysicalKey
     var summary: (PhysicalKey) -> String
     var isDirty: (PhysicalKey) -> Bool
 
-    private let baseSize: CGFloat = 196
-    private let knobSize: CGFloat = 104
-    private let cornerSize: CGFloat = 44
-    private let cornerOffset: CGFloat = 66
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var angle: Double = 0
+    @State private var pressed = false
+    /// 每次演示加一。延时回调发现自己不是最新一次就作废，连点时不会被旧的回正打断。
+    @State private var demo = 0
+
+    private let baseSize: CGFloat = 308
+    private let knobSize: CGFloat = 224
 
     var body: some View {
-        ZStack {
-            baseplate
-            knurledKnob
-            corner(.rotateLeft,      x: -cornerOffset, y: -cornerOffset)
-            corner(.rotateRight,     x:  cornerOffset, y: -cornerOffset)
-            corner(.holdRotateLeft,  x: -cornerOffset, y:  cornerOffset)
-            corner(.holdRotateRight, x:  cornerOffset, y:  cornerOffset)
+        VStack(spacing: 16) {
+            HStack {
+                pill(.rotateLeft)
+                Spacer(minLength: 16)
+                pill(.rotateRight)
+            }
+            ZStack {
+                base
+                knob
+            }
+            HStack {
+                pill(.holdRotateLeft)
+                Spacer(minLength: 16)
+                pill(.holdRotateRight)
+            }
         }
-        .frame(width: baseSize, height: baseSize)
-        .animation(.snappy(duration: 0.18), value: selection)
+        .frame(width: 400)
+        .opacity(isEnabled ? 1 : 0.38)
     }
 
-    // MARK: - 底座
+    /// 选中并演示。点已选中的那个也会再演示一遍。
+    private func select(_ key: PhysicalKey) {
+        selection = key
+        guard !reduceMotion else { return }
+        demo += 1
+        let id = demo
+        func later(_ s: Double, _ body: @escaping () -> Void) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + s) { if demo == id { body() } }
+        }
+        // 上一次演示可能还停在半路，先瞬间归位
+        angle = 0
+        pressed = false
 
-    private var baseplate: some View {
-        RoundedRectangle(cornerRadius: 26, style: .continuous)
-            .fill(LinearGradient(colors: [Color(white: 0.86), Color(white: 0.72)],
+        switch key {
+        case .press:
+            // 和长按前半段一模一样的「按下」，停够时间再弹回。停 0.13s / 0.2s 都一闪而过，看不出按了。
+            withAnimation(Theme.Motion.pressDown) { pressed = true }
+            later(0.45) { withAnimation(Theme.Motion.press) { pressed = false } }
+        case .rotateLeft, .rotateRight:
+            withAnimation(Theme.Motion.rotate) { angle = key == .rotateLeft ? -15 : 15 }
+            later(2) { withAnimation(Theme.Motion.settle) { angle = 0 } }
+        case .holdRotateLeft, .holdRotateRight:
+            withAnimation(Theme.Motion.pressDown) { pressed = true }
+            later(0.22) {
+                withAnimation(Theme.Motion.rotate) { angle = key == .holdRotateLeft ? -30 : 30 }
+            }
+            later(2) { withAnimation(Theme.Motion.settle) { angle = 0; pressed = false } }
+        }
+    }
+
+    // MARK: - 底座与旋钮
+
+    private var base: some View {
+        RoundedRectangle(cornerRadius: 30, style: .continuous)
+            .fill(LinearGradient(colors: [Theme.baseTop, Theme.baseBottom],
                                  startPoint: .topLeading, endPoint: .bottomTrailing))
-            .overlay(
-                RoundedRectangle(cornerRadius: 26, style: .continuous)
-                    .strokeBorder(.white.opacity(0.6), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
+            // 浅色外观下底座和舞台都是近白，外沿描一圈分隔线才分得开
+            .overlay(RoundedRectangle(cornerRadius: 30, style: .continuous)
+                .strokeBorder(Theme.separator, lineWidth: 1))
+            .frame(width: baseSize, height: baseSize)
+            .shadow(color: .black.opacity(0.3), radius: 22, y: 12)
     }
 
-    // MARK: - 中心旋钮（按压）
-
-    private var knurledKnob: some View {
+    private var knob: some View {
         let active = selection == .press
-
-        return Button {
-            selection = .press
-        } label: {
+        return Button { select(.press) } label: {
             ZStack {
                 Circle()
-                    .fill(LinearGradient(colors: [Color(white: 0.38), Color(white: 0.22)],
-                                         startPoint: .top, endPoint: .bottom))
+                    .fill(RadialGradient(
+                        stops: [.init(color: Theme.knobHighlight, location: 0),
+                                .init(color: Theme.knob, location: 0.42),
+                                .init(color: Theme.knobEdge, location: 1)],
+                        center: UnitPoint(x: 0.34, y: 0.28),
+                        startRadius: 0, endRadius: knobSize * 0.75))
+                    .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 1.5)
+                        .blur(radius: 1).offset(y: 1).mask(Circle()))
+                    // 按下时投影收短，看起来是陷进底座里
+                    .shadow(color: .black.opacity(0.45), radius: pressed ? 8 : 17, y: pressed ? 6 : 16)
+                    .overlay(alignment: .top) {
+                        // 顶部定位凹点，随旋钮转动
+                        Circle()
+                            .fill(Color(red: 0.47, green: 0.09, blue: 0).opacity(0.55))
+                            .frame(width: 13, height: 13)
+                            .padding(.top, 15)
+                    }
+                    .rotationEffect(.degrees(angle))
 
-                // 侧面滚花
-                ForEach(0..<56, id: \.self) { i in
-                    Capsule()
-                        .fill(.white.opacity(0.13))
-                        .frame(width: 1.3, height: 8)
-                        .offset(y: -(knobSize / 2 - 6))
-                        .rotationEffect(.degrees(Double(i) / 56 * 360))
+                // 中央标签不随旋钮转：深褐字印在红面上（5.61 : 1），白字只有 3.10，不用。
+                VStack(spacing: 2) {
+                    HStack(spacing: 5) {
+                        Text("按压").font(Theme.Font.headline)
+                        if isDirty(.press) { dirtyDot }
+                    }
+                    Text(summary(.press))
+                        .font(Theme.Font.caption)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 130)
                 }
-
-                // 顶面
-                Circle()
-                    .fill(LinearGradient(colors: [Color(white: 0.46), Color(white: 0.30)],
-                                         startPoint: .topLeading, endPoint: .bottomTrailing))
-                    .frame(width: knobSize - 26, height: knobSize - 26)
-
-                // 顶面上的定位点，和实物一致
-                Circle()
-                    .fill(.white.opacity(0.7))
-                    .frame(width: 5, height: 5)
-                    .offset(y: -(knobSize / 2 - 24))
-
-                Text(summary(.press))
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.92))
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-                    .minimumScaleFactor(0.65)
-                    .frame(width: knobSize - 40)
+                .foregroundStyle(Theme.knobLabel)
             }
             .frame(width: knobSize, height: knobSize)
-            .overlay {
-                Circle().strokeBorder(Color.accentColor, lineWidth: 3).opacity(active ? 1 : 0)
-            }
-            .overlay(alignment: .topTrailing) { dirtyDot(.press).offset(x: -6, y: 6) }
-            .shadow(color: .black.opacity(0.3), radius: 5, y: 2)
+            // 0.965 只缩 8pt，加上选中蓝圈，实测看不出按了；0.92 缩 18pt
+            .scaleEffect(pressed ? 0.92 : 1)
+            .padding(5)
+            .overlay(Circle().strokeBorder(Theme.accent, lineWidth: 2.5).opacity(active ? 1 : 0))
+            .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .help("\(PhysicalKey.press.label)：\(summary(.press))")
+        .help("按压旋钮：\(summary(.press))")
+        .accessibilityLabel(label(.press))
     }
 
-    // MARK: - 四角旋转操作
+    // MARK: - 药丸
 
-    private func corner(_ key: PhysicalKey, x: CGFloat, y: CGFloat) -> some View {
+    private func pill(_ key: PhysicalKey) -> some View {
         let active = selection == key
-
-        return Button {
-            selection = key
-        } label: {
-            ZStack {
-                Circle()
-                    .fill(active ? AnyShapeStyle(Color.accentColor)
-                                 : AnyShapeStyle(Material.thick))
-                Image(systemName: key.symbolName)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(active ? .white : .primary)
+        return Button { select(key) } label: {
+            HStack(spacing: 7) {
+                if isDirty(key) { dirtyDot }
+                Text(shortName(key)).font(active ? Theme.Font.captionBold : Theme.Font.caption)
+                Text(summary(key))
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(active ? Color.white : Theme.text3)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
             }
-            .frame(width: cornerSize, height: cornerSize)
-            .overlay(alignment: .topTrailing) { dirtyDot(key).offset(x: 1, y: -1) }
-            .shadow(color: .black.opacity(0.2), radius: 3, y: 1)
+            .foregroundStyle(active ? Color.white : Theme.text1)
+            .padding(.horizontal, 14)
+            .frame(width: 184, height: 38)
+            .background(Capsule().fill(active ? Theme.primary : Theme.card))
+            .overlay(Capsule().strokeBorder(active ? .clear : Theme.separator))
+            .shadow(color: .black.opacity(0.2), radius: 7, y: 4)
+            .contentShape(Capsule())
+            .animation(Theme.Motion.select, value: active)
         }
         .buttonStyle(.plain)
-        .offset(x: x, y: y)
         .help("\(key.label)：\(summary(key))")
+        .accessibilityLabel(label(key))
     }
 
-    @ViewBuilder
-    private func dirtyDot(_ key: PhysicalKey) -> some View {
-        if isDirty(key) {
-            Circle()
-                .fill(.orange)
-                .frame(width: 8, height: 8)
-                .overlay(Circle().strokeBorder(.white.opacity(0.8), lineWidth: 1))
+    private func shortName(_ key: PhysicalKey) -> String {
+        switch key {
+        case .holdRotateLeft:  return "长按左旋"
+        case .holdRotateRight: return "长按右旋"
+        default:               return key.label
         }
+    }
+
+    private func label(_ key: PhysicalKey) -> String {
+        "\(key.label)，当前功能 \(summary(key))" + (isDirty(key) ? "，有未写入修改" : "")
+    }
+
+    private var dirtyDot: some View {
+        Circle().fill(Theme.warning).frame(width: 7, height: 7)
     }
 }

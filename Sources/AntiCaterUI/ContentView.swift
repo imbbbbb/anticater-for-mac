@@ -1,6 +1,7 @@
 import SwiftUI
 import AntiCaterCore
 
+/// 主窗口：左边旋钮舞台（固定 460 宽），右边检查器（弹性）。
 public struct ContentView: View {
     @ObservedObject var model: DeviceModel
     @Environment(\.openWindow) private var openWindow
@@ -11,16 +12,20 @@ public struct ContentView: View {
     public init(model: DeviceModel) { self.model = model }
 
     public var body: some View {
-        NavigationSplitView {
-            sidebar
-                .navigationSplitViewColumnWidth(min: 250, ideal: 272, max: 320)
-        } detail: {
+        HStack(spacing: 0) {
+            stage
+                .frame(width: 460)
+                .frame(maxHeight: .infinity)
+                .background(Theme.stage)
+            Theme.separator.frame(width: 1)
             EditorView(model: model)
-                .navigationSplitViewColumnWidth(min: 400, ideal: 480)
-                .overlay(alignment: .top) { toast }
+                .frame(minWidth: 440, maxWidth: .infinity, maxHeight: .infinity)
+                .background(Theme.window)
+                .overlay(alignment: .bottom) { toast }
         }
+        .navigationTitle("ANTICATER")
         .toolbar { toolbar }
-        .frame(minWidth: 780, minHeight: 560)
+        .frame(minWidth: 920, minHeight: 660)
         // 开窗即连，但失败要静默：主窗口每显示一次就会走一遍这里（菜单栏 app
         // 关窗再开是常事），没插线的人会被反复拦住。占位页已经在讲该怎么做了。
         .onAppear { model.connect(silentOnFailure: true) }
@@ -54,9 +59,9 @@ public struct ContentView: View {
         }
     }
 
-    // MARK: - 侧栏
+    // MARK: - 旋钮舞台
 
-    private var sidebar: some View {
+    private var stage: some View {
         VStack(spacing: 0) {
             KnobControl(
                 selection: $model.selected,
@@ -64,60 +69,60 @@ public struct ContentView: View {
                     model.binding(key, in: model.layer).map(Summary.short) ?? "—"
                 },
                 isDirty: { model.isDirty($0, in: model.layer) })
-            .frame(maxWidth: .infinity)
-            .padding(.top, 16)
-            .padding(.bottom, 10)
+            .disabled(model.current == nil)
+            .padding(.vertical, 28)
+            .frame(maxHeight: .infinity)
 
-            linkBar
-                .padding(.bottom, 12)
-
-            List(selection: Binding(get: { model.selected },
-                                    set: { model.selected = $0 ?? model.selected })) {
-                Section("旋钮操作") {
-                    ForEach(PhysicalKey.displayOrder, id: \.self) { key in
-                        row(key).tag(key)
+            VStack(alignment: .leading, spacing: 10) {
+                // 灯光在左、清空全部在右，同一行，左右边缘和上方药丸对齐
+                HStack(spacing: 16) {
+                    lightRow
+                    Spacer(minLength: 0)
+                    Button(role: .destructive) { confirmClearAll = true } label: {
+                        Text("清空全部配置").foregroundStyle(Theme.danger)
                     }
+                    .buttonStyle(.borderless)
+                    .fixedSize()
+                    .disabled(model.current == nil)
+                    .opacity(model.current == nil ? 0.38 : 1)
+                    .help("把五个旋钮操作全部清空。会先弹窗确认，写入前还能撤回。")
                 }
-
-                Section("灯光") {
-                    if let rgb = model.rgbLight {
-                        RGBLightControls(model: model, light: rgb)
-                    } else {
-                        Picker("灯效", selection: Binding(get: { model.lightMode },
-                                                        set: { model.setLight(mode: $0) })) {
-                            ForEach(Proto.lightModes, id: \.mode) { item in
-                                Text(item.name).tag(item.mode)
-                            }
-                        }
-                        .disabled(!model.connection.isConnected || !model.lightAvailable)
-                    }
-
-                    // 连上了却读不到灯效，说明这台固件不认这组命令。说一句，
-                    // 否则用户只会看到一个点不动的选择器，不知道是坏了还是没连上。
-                    if model.connection.isConnected, !model.lightAvailable, model.rgbLight == nil {
-                        Text("这台旋钮的固件不支持灯效设置，按键配置不受影响。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                // 连上了却读不到灯效，说明这台固件不认这组命令。说一句，
+                // 否则用户只会看到一个点不动的选择器，不知道是坏了还是没连上。
+                if model.connection.isConnected, !model.lightAvailable, model.rgbLight == nil {
+                    Text("这台旋钮的固件不支持灯效设置，按键配置不受影响。")
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(Theme.text3)
                 }
             }
-            .listStyle(.sidebar)
-
-            Divider()
-            Button(role: .destructive) { confirmClearAll = true } label: {
-                Label("清空全部配置", systemImage: "eraser")
-                    .frame(maxWidth: .infinity)
-            }
-            .controlSize(.large)
-            .disabled(!model.connection.isConnected)
-            .padding(10)
-            .help("把五个旋钮操作全部清空。会先弹窗确认，写入前还能撤回。")
+            .font(Theme.Font.caption)
+            .padding(.horizontal, 30)
+            .padding(.bottom, 44)
         }
     }
 
-    /// 两条链路的在线状态。挂在旋钮图下方——工具栏太挤，放这儿正好接着旋钮读。
-    private var linkBar: some View {
-        HStack(spacing: 10) {
+    /// 灯光改了立即下发，不进「写入旋钮」。
+    @ViewBuilder
+    private var lightRow: some View {
+        if let rgb = model.rgbLight {
+            RGBLightControls(model: model, light: rgb)
+        } else {
+            Picker("灯效", selection: Binding(get: { model.lightMode },
+                                            set: { model.setLight(mode: $0) })) {
+                ForEach(Proto.lightModes, id: \.mode) { item in
+                    Text(item.name).tag(item.mode)
+                }
+            }
+            .frame(width: 220)
+            .disabled(!model.connection.isConnected || !model.lightAvailable)
+        }
+    }
+
+    // MARK: - 工具栏
+
+    @ToolbarContentBuilder
+    private var toolbar: some ToolbarContent {
+        ToolbarItemGroup {
             linkBadge("数据线", systemImage: "cable.connector", on: model.links.usb,
                       help: model.links.usb
                           ? "USB 线已插好，可以改配置" : "USB 线没插——改配置必须插线")
@@ -128,59 +133,11 @@ public struct ContentView: View {
                             + "读写配置都要插 USB 线"
                           : "蓝牙未连接")
         }
-        .frame(maxWidth: .infinity)
-    }
 
-    private func linkBadge(_ title: String, systemImage: String,
-                           on: Bool, help: String) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: systemImage).font(.system(size: 11, weight: .medium))
-            Text(title).font(.system(size: 11, weight: .medium))
-        }
-        .foregroundStyle(on ? Color.accentColor : Color.secondary)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 4)
-        .background {
-            Capsule().fill(on ? Color.accentColor.opacity(0.14)
-                              : Color.secondary.opacity(0.10))
-        }
-        .help(help)
-    }
+        ToolbarItem { Spacer() }
 
-    private func row(_ key: PhysicalKey) -> some View {
-        let binding = model.binding(key, in: model.layer)
-        return HStack(spacing: 10) {
-            Image(systemName: key.symbolName)
-                .font(.system(size: 15))
-                .frame(width: 22)
-                .foregroundStyle(model.selected == key ? Color.accentColor : .secondary)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(key.label)
-                    .font(.system(size: 13))
-                Text(binding.map(Summary.short) ?? "—")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-
-            Spacer(minLength: 0)
-
-            if model.isDirty(key, in: model.layer) {
-                Circle().fill(.orange).frame(width: 6, height: 6)
-            }
-        }
-        .padding(.vertical, 3)
-        .help(binding.map(Summary.full) ?? "未设置")
-    }
-
-    // MARK: - 工具栏
-
-    @ToolbarContentBuilder
-    private var toolbar: some ToolbarContent {
         ToolbarItemGroup {
-            if model.busy { ProgressView().controlSize(.small) }
+            syncBadge
 
             Menu {
                 Button {
@@ -202,15 +159,61 @@ public struct ContentView: View {
                     .help("退回到旋钮上现在的设置")
             }
 
+            // 自己画主按钮：新系统的工具栏不认 borderedProminent 的 tint，画出来是灰的。
+            let canWrite = model.hasChanges && !model.busy && model.connection.isConnected
             Button {
                 confirmWrite = true
             } label: {
-                Text(model.hasChanges ? "写入旋钮（\(model.changeCount)）" : "写入旋钮")
+                Text(model.busy && model.connection.isConnected ? "写入中…" : "写入旋钮")
+                    .font(Theme.Font.captionBold)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .frame(height: 28)
+                    .background(Capsule().fill(Theme.primary))
+                    .opacity(canWrite ? 1 : 0.38)
             }
+            .buttonStyle(.plain)
             .keyboardShortcut("s")
-            .buttonStyle(.borderedProminent)
-            .disabled(!model.hasChanges || model.busy)
+            .disabled(!canWrite)
         }
+    }
+
+    /// 两条链路的在线状态，只读——用户选不了走哪条，蓝牙上本来就没有配置通道。
+    private func linkBadge(_ title: String, systemImage: String,
+                           on: Bool, help: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .labelStyle(.titleAndIcon)
+            .font(Theme.Font.caption)
+            .foregroundStyle(on ? Theme.accent : Theme.text3)
+            .padding(.horizontal, 10)
+            .frame(height: 26)
+            .background(Capsule().fill(on ? Theme.accent.opacity(0.14) : Theme.hover))
+            .help(help)
+    }
+
+    private var syncBadge: some View {
+        let (text, color): (String, Color) = {
+            switch model.connection {
+            case .connecting:
+                return ("连接中…", Theme.text3)
+            case .disconnected:
+                return (model.links.bluetooth ? "仅蓝牙，读不到配置" : "未连接", Theme.danger)
+            case .connected:
+                return model.hasChanges ? ("未写入 · \(model.changeCount) 处", Theme.warning)
+                                        : ("已同步", Theme.success)
+            }
+        }()
+        return HStack(spacing: 6) {
+            if model.busy {
+                ProgressView().controlSize(.small)
+            } else {
+                Circle().fill(color).frame(width: 8, height: 8)
+            }
+            Text(text)
+                .font(Theme.Font.caption)
+                .foregroundStyle(model.connection.isConnected ? color : Theme.text2)
+        }
+        .padding(.horizontal, 6)
     }
 
     private var connectionDetail: String {
@@ -225,20 +228,23 @@ public struct ContentView: View {
 
     // MARK: - 瞬时提示
 
-    /// 成功类提示浮在编辑区顶部，几秒后自己消失，不常驻占版面。
+    /// 成功类提示浮在检查器底部，几秒后自己消失，不常驻占版面。
+    /// 不放顶部：会盖住标题和状态行，而那正是用户刚改完要看的地方。
     @ViewBuilder
     private var toast: some View {
         if let message = model.message {
             Text(message)
-                .font(.system(size: 12, weight: .medium))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
+                .font(Theme.Font.captionBold)
+                .foregroundStyle(Theme.text1)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 9)
                 .background {
-                    Capsule().fill(.regularMaterial)
-                        .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+                    Capsule().fill(Theme.elevated)
+                        .overlay(Capsule().strokeBorder(Theme.separator))
+                        .shadow(color: .black.opacity(0.25), radius: 10, y: 3)
                 }
-                .padding(.top, 12)
-                .transition(.move(edge: .top).combined(with: .opacity))
+                .padding(.bottom, 20)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 }

@@ -54,7 +54,7 @@ No privacy permissions such as Input Monitoring are required: the configuration 
 
 The app connects automatically as soon as the cable is plugged in. The "连接旋钮" (Connect) item in the toolbar is only for cases where no plug event arrives — for example after quitting the original software that was holding the device.
 
-Pick a knob action on the left, choose a type and adjust its settings on the right, then commit with "写入旋钮" (Write to knob) in the top-right corner. Edits are staged and can be discarded at any point before committing; after writing, the app reads the configuration back and verifies it, listing explicitly anything that did not take effect.
+Pick an action on the knob illustration on the left (the four labels are the four rotations, the knob itself is press), choose a type and adjust its settings on the right, then commit with "写入旋钮" (Write to knob) in the top-right corner. Edits are staged and can be discarded at any point before committing; after writing, the app reads the configuration back and verifies it, listing explicitly anything that did not take effect.
 
 If the cable is unplugged mid-session the app disconnects and keeps your staged edits, then reconnects automatically when it is plugged back in.
 

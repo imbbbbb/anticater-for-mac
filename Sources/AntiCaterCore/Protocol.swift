@@ -510,15 +510,6 @@ public enum PhysicalKey: UInt8, CaseIterable {
         }
     }
 
-    public var symbolName: String {
-        switch self {
-        case .rotateLeft:      return "arrow.counterclockwise"
-        case .press:           return "hand.tap"
-        case .rotateRight:     return "arrow.clockwise"
-        case .holdRotateLeft:  return "arrow.counterclockwise.circle"
-        case .holdRotateRight: return "arrow.clockwise.circle"
-        }
-    }
 
     public var hint: String {
         switch self {

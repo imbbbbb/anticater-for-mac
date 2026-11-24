@@ -13,6 +13,7 @@ struct AntiCaterApp: App {
         Window("ANTICATER", id: "main") {
             ContentView(model: model)
         }
+        .defaultSize(width: 1024, height: 700)
         .windowResizability(.contentMinSize)
 
         // 诊断单独开一个窗口，不塞进主窗口的标签页里：它是排障时才用一次的东西，

@@ -23,7 +23,6 @@ public final class DeviceModel: ObservableObject {
     @Published var draft: [UInt8: [Proto.Binding]] = [:]
     /// 灯效。选完立刻下发，不进 draft，所以只有一个值。
     @Published private(set) var lightMode: UInt8 = 0
-    @Published private(set) var palette: [Color] = []
     private var rawPalette: [(r: UInt8, g: UInt8, b: UInt8)] = []
     /// 这台固件认不认灯效命令。读调色板超时就置 false，界面据此把灯效整块禁掉——
     /// 见 `readLightIfSupported`。
@@ -523,15 +522,10 @@ public final class DeviceModel: ObservableObject {
             lightAvailable = false
             lightMode = 0
             rawPalette = []
-            palette = []
             return
         }
         lightAvailable = true
         lightMode = light.mode
         rawPalette = light.palette
-        palette = light.palette.map {
-            Color(.sRGB, red: Double($0.r) / 255,
-                  green: Double($0.g) / 255, blue: Double($0.b) / 255)
-        }
     }
 }
